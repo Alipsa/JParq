@@ -640,7 +640,17 @@ public class JParqPreparedStatement implements PreparedStatement {
     boolean transferred = false;
     try {
       if (setOperationQuery) {
-        JParqResultSet rs = executeSetOperation();
+        JParqResultSet rs;
+        try {
+          rs = executeSetOperation();
+        } catch (SQLException e) {
+          throw e;
+        } catch (Exception e) {
+          // A classified failure in the chain is a query-execution problem,
+          // such as an invalid ORDER BY position, not a set operation
+          // assembly failure.
+          throw SqlExceptions.wrap("Failed to execute query", "Failed to execute set operation", e);
+        }
         publishResult(rs, cancellation, context);
         transferred = true;
         return rs;
@@ -688,7 +698,9 @@ public class JParqPreparedStatement implements PreparedStatement {
       } catch (SQLException e) {
         throw e;
       } catch (Exception e) {
-        throw new SQLException("Failed to open query data source", e);
+        // A classified failure in the chain is a query-execution problem, not
+        // an I/O problem opening the source.
+        throw SqlExceptions.wrap("Failed to execute query", "Failed to open query data source", e);
       }
 
       // Derive label/physical lists from the parsed SELECT
@@ -2357,13 +2369,19 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          order specification parsed from the set operation query
    * @return ordered rows (or the original rows when no ordering is requested)
    * @throws SQLException
-   *           if an ORDER BY column cannot be resolved
+   *           if an ORDER BY key carries neither position, label, nor expression
+   * @throws IllegalArgumentException
+   *           if a positional reference is outside the set result or an ORDER BY
+   *           column cannot be resolved, even when the result is empty, with
+   *           SQLState 42000
    */
   private List<List<Object>> applySetOrdering(List<List<Object>> rows, List<String> labels, List<Integer> sqlTypes,
       List<Schema> valueSchemas, List<SqlParser.SetOrder> orderBy) throws SQLException {
-    if (orderBy == null || orderBy.isEmpty() || rows.isEmpty()) {
+    if (orderBy == null || orderBy.isEmpty()) {
       return rows;
     }
+    // Resolve every key before the empty-result shortcut so invalid
+    // positional references and unknown labels still fail on an empty result.
     Map<String, Integer> labelIndexes = new HashMap<>();
     for (int i = 0; i < labels.size(); i++) {
       String key = Identifier.lookupKey(labels.get(i));
@@ -2376,16 +2394,24 @@ public class JParqPreparedStatement implements PreparedStatement {
     boolean hasExpressions = false;
     for (SqlParser.SetOrder order : orderBy) {
       int index;
-      if (order.columnIndex() != null) {
-        index = order.columnIndex() - 1;
+      if (order.ordinal() != null) {
+        // The literal is range-checked as written, so diagnostics preserve
+        // non-canonical forms such as 099.
+        index = OrderingUtil.position(order.ordinal(), labels.size()) - 1;
       } else if (order.expression() == null) {
         if (order.columnLabel() == null) {
           throw new SQLException("Set operation ORDER BY requires column index, label, or expression");
         }
         String lookupKey = Identifier.lookupKey(order.columnLabel());
         Integer mapped = lookupKey == null ? null : labelIndexes.get(lookupKey);
+        if (mapped == null && lookupKey != null) {
+          // A quoted lowercase reference falls back to the unquoted label,
+          // matching single-select ORDER BY resolution (#385).
+          String alternative = ColumnMappingUtil.alternativeColumnKey(lookupKey);
+          mapped = alternative == null ? null : labelIndexes.get(alternative);
+        }
         if (mapped == null) {
-          throw new SQLException("Unknown set operation ORDER BY column: " + order.columnLabel());
+          throw SqlExceptions.syntaxFailure("Unknown set operation ORDER BY column: " + order.columnLabel());
         }
         index = mapped;
       } else {
@@ -2396,16 +2422,16 @@ public class JParqPreparedStatement implements PreparedStatement {
           }
           String lookupKey = Identifier.lookupKey(column);
           if (lookupKey == null || !labelIndexes.containsKey(lookupKey)) {
-            throw new SQLException("Unknown set operation ORDER BY expression column: " + column);
+            throw SqlExceptions.syntaxFailure("Unknown set operation ORDER BY expression column: " + column);
           }
         }
         index = -1;
         hasExpressions = true;
       }
-      if ((index < 0 && order.expression() == null) || index >= labels.size()) {
-        throw new SQLException("Set operation ORDER BY column index out of range: " + (index + 1));
-      }
       resolved.add(new ResolvedSetOrder(index, order.asc(), order.expression(), order.nullOrdering()));
+    }
+    if (rows.isEmpty()) {
+      return rows;
     }
     ValueExpressionEvaluator evaluator = null;
     Schema setOrderSchema = null;

@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
@@ -26,6 +27,7 @@ import se.alipsa.jparq.helper.LiteralConverter;
 public final class QueryProcessor implements AutoCloseable {
 
   private final RecordReader reader;
+  // DISTINCT key fallback, used only when no schema is known
   private final List<String> projection;
   private final Expression where;
   private final int limit;
@@ -361,7 +363,7 @@ public final class QueryProcessor implements AutoCloseable {
    * @param reader
    *          the reader providing {@link GenericRecord} instances
    * @param projection
-   *          list of columns to project
+   *          columns used as the DISTINCT key fallback when no schema is known
    * @param where
    *          the WHERE expression (may be null)
    * @param limit
@@ -371,9 +373,7 @@ public final class QueryProcessor implements AutoCloseable {
    */
   public QueryProcessor(RecordReader reader, List<String> projection, Expression where, int limit, Options options) {
     this.reader = Objects.requireNonNull(reader);
-    List<String> augmentedProjection = augmentProjectionWithOrderColumns(projection, options.orderBy,
-        options.preOrderBy);
-    this.projection = Collections.unmodifiableList(new ArrayList<>(augmentedProjection));
+    this.projection = Collections.unmodifiableList(new ArrayList<>(projection == null ? List.of() : projection));
     this.where = where;
     this.limit = limit;
     Options opts = Objects.requireNonNull(options, "options");
@@ -391,7 +391,9 @@ public final class QueryProcessor implements AutoCloseable {
     this.windowState = WindowState.empty();
     this.preOrderBy = canonicalizeOrderKeys(opts.preOrderBy);
     this.hasPreStage = (this.preLimit >= 0) || !this.preOrderBy.isEmpty() || (this.preOffset > 0);
-    List<String> distinctCols = opts.distinctColumns == null ? this.projection : opts.distinctColumns;
+    List<String> distinctCols = opts.distinctColumns == null
+        ? defaultDistinctColumns(opts.schema, this.projection)
+        : opts.distinctColumns;
     this.distinctColumns = distinctCols;
     this.distinctExpressions = opts.distinctExpressions;
     this.mixedDistinctTypes = new boolean[distinctExpressions.size()];
@@ -470,6 +472,15 @@ public final class QueryProcessor implements AutoCloseable {
         rec = reader.read();
       }
 
+      // An empty input leaves no record to take the schema from. The reader
+      // schema is the full input schema; ordinal bounds derived from it use
+      // only the fields a wildcard projection exposes, so the columns a USING
+      // join keeps hidden do not widen the bound. A narrower read schema would
+      // validate positions against the wrong width.
+      if (sortSchema == null) {
+        sortSchema = reader.schema();
+      }
+
       // ensure evaluator exists if WHERE is used
       ensureEvaluator(sortSchema);
 
@@ -479,8 +490,13 @@ public final class QueryProcessor implements AutoCloseable {
           buf = applyDistinct(buf);
           distinctApplied = true;
         }
-        if (!preOrderBy.isEmpty() && sortSchema != null && buf.size() > 1) {
-          buf.sort(buildComparator(sortSchema, preOrderBy));
+        if (!preOrderBy.isEmpty() && sortSchema != null) {
+          // Building the comparator resolves each key once, so invalid
+          // positional references fail even without a row to compare.
+          Comparator<GenericRecord> comparator = buildComparator(sortSchema, preOrderBy);
+          if (buf.size() > 1) {
+            buf.sort(comparator);
+          }
         }
         if (preOffset > 0 && !buf.isEmpty()) {
           int before = buf.size();
@@ -511,9 +527,13 @@ public final class QueryProcessor implements AutoCloseable {
         buf = applyDistinct(buf);
       }
 
-      // sort by ORDER BY keys if we have schema and >1 row
-      if (!orderBy.isEmpty() && buf.size() > 1 && sortSchema != null) {
-        buf.sort(buildComparator(sortSchema, orderBy));
+      // Building the comparator resolves each key once, so invalid positional
+      // references fail even when there is nothing to sort.
+      if (!orderBy.isEmpty() && sortSchema != null) {
+        Comparator<GenericRecord> comparator = buildComparator(sortSchema, orderBy);
+        if (buf.size() > 1) {
+          buf.sort(comparator);
+        }
       }
 
       this.sorted = buf;
@@ -531,13 +551,20 @@ public final class QueryProcessor implements AutoCloseable {
   }
 
   private Comparator<GenericRecord> buildComparator(Schema schema, List<SqlParser.OrderKey> keys) {
+    // Resolve every key up front so ordinal references are validated against
+    // the schema once, instead of being re-parsed on each comparison.
+    List<Function<GenericRecord, Object>> extractors = new ArrayList<>(keys.size());
+    for (SqlParser.OrderKey key : keys) {
+      extractors.add(buildOrderValueExtractor(schema, key));
+    }
     return (a, b) -> {
-      for (SqlParser.OrderKey k : keys) {
-        Object va = resolveOrderValue(a, schema, k);
-        Object vb = resolveOrderValue(b, schema, k);
+      for (int i = 0; i < keys.size(); i++) {
+        Object va = extractors.get(i).apply(a);
+        Object vb = extractors.get(i).apply(b);
+        SqlParser.OrderKey key = keys.get(i);
 
         boolean hasNull = va == null || vb == null;
-        int nullCmp = OrderingUtil.compareNulls(va, vb, k.asc(), k.nullOrdering());
+        int nullCmp = OrderingUtil.compareNulls(va, vb, key.asc(), key.nullOrdering());
         if (nullCmp != 0) {
           return nullCmp;
         }
@@ -547,11 +574,109 @@ public final class QueryProcessor implements AutoCloseable {
 
         int c = ExpressionEvaluator.typedCompare(va, vb);
         if (c != 0) {
-          return k.asc() ? c : -c;
+          return key.asc() ? c : -c;
         }
       }
       return 0;
     };
+  }
+
+  /**
+   * Builds the value extractor for one ordering key, resolving positional
+   * references and column lookups against the schema once. Keys bound to an
+   * expression keep the original per-record evaluation, so the decorative
+   * positional literal of a bound key is not validated against the input schema.
+   *
+   * @param schema
+   *          sort schema of the buffered rows
+   * @param key
+   *          the ordering key
+   * @return the extractor producing the key value for a record
+   * @throws IllegalArgumentException
+   *           if a positional reference is outside the visible select-list width
+   *           or a column reference resolves to no field, with SQLState 42000
+   */
+  private Function<GenericRecord, Object> buildOrderValueExtractor(Schema schema, SqlParser.OrderKey key) {
+    if (key.expression() == null) {
+      return buildColumnOrderValueExtractor(schema, key);
+    }
+    Expression expression = key.expression();
+    return record -> {
+      ensureValueEvaluator(schema);
+      return valueEvaluator.eval(expression, record);
+    };
+  }
+
+  /**
+   * Builds the value extractor for the column reference of an ordering key.
+   *
+   * @param schema
+   *          sort schema of the buffered rows
+   * @param key
+   *          the ordering key
+   * @return the extractor producing the column value for a record
+   * @throws IllegalArgumentException
+   *           if a positional reference is outside the visible select-list width
+   *           or the column reference resolves to no field, with SQLState 42000
+   */
+  private Function<GenericRecord, Object> buildColumnOrderValueExtractor(Schema schema, SqlParser.OrderKey key) {
+    String column = key.column();
+    if (OrderingUtil.isPosition(column)) {
+      // The bound is the wildcard projection of the input, not the record
+      // width: a USING join keeps its peer copies of the join columns in the
+      // record but hides them from the select list. A single-input projection
+      // wider than the input binds its positional references at preparation,
+      // so a key left unbound here addresses a wildcard-only projection whose
+      // output width equals this visible width.
+      List<String> visible = computeProjection(List.of("*"), schema);
+      int ordinal = OrderingUtil.position(column, visible.size());
+      Schema.Field field = schema.getField(visible.get(ordinal - 1));
+      return record -> AvroCoercions.unwrap(record.get(field.name()), field.schema());
+    }
+    Schema.Field field = resolveOrderField(schema, column);
+    if (field != null) {
+      return record -> AvroCoercions.unwrap(record.get(field.name()), field.schema());
+    }
+    Expression expression = orderExpressionFor(column);
+    if (expression != null) {
+      return record -> {
+        ensureValueEvaluator(schema);
+        return valueEvaluator.eval(expression, record);
+      };
+    }
+    // Resolving every key up front means an unresolvable reference fails here
+    // instead of degrading to a no-op sort that compares every key equal.
+    throw SqlExceptions.syntaxFailure("Unknown column for ORDER BY: " + column);
+  }
+
+  /**
+   * Resolves an ordering column to a field of the sort schema. An exact
+   * physical-name match wins, and a quoted identifier then falls back to its
+   * unquoted text without case folding, while an unquoted identifier falls back
+   * to a case-insensitive match.
+   *
+   * @param schema
+   *          sort schema of the buffered rows
+   * @param column
+   *          the ordering column text, as written
+   * @return the matching field, or {@code null} when the reference resolves to no
+   *         field
+   */
+  private Schema.Field resolveOrderField(Schema schema, String column) {
+    if (column == null) {
+      return null;
+    }
+    Schema.Field field = schema.getField(column);
+    if (field != null) {
+      return field;
+    }
+    Identifier identifier = Identifier.of(column);
+    if (identifier != null && identifier.quoted()) {
+      // A quoted identifier keeps its declared case, so there is no
+      // case-insensitive fallback.
+      return schema.getField(identifier.text());
+    }
+    return findFieldIgnoreCase(schema, column);
   }
 
   private Map<String, Expression> normalizeOrderByExpressions(Map<String, Expression> expressions) {
@@ -593,40 +718,6 @@ public final class QueryProcessor implements AutoCloseable {
           unqualifiedColumnMapping, qualifierColumnMapping);
       valueEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, mappings, windowState());
     }
-  }
-
-  private Object resolveOrderValue(GenericRecord record, Schema schema, SqlParser.OrderKey key) {
-    if (key.expression() != null) {
-      ensureValueEvaluator(schema);
-      if (valueEvaluator != null) {
-        return valueEvaluator.eval(key.expression(), record);
-      }
-    }
-    if (key.column() != null && key.column().matches("[0-9]+")) {
-      int ordinal = Integer.parseInt(key.column());
-      if (ordinal < 1 || ordinal > schema.getFields().size()) {
-        throw new IllegalArgumentException("ORDER BY position is outside the select list: " + ordinal);
-      }
-      Schema.Field field = schema.getFields().get(ordinal - 1);
-      return AvroCoercions.unwrap(record.get(field.name()), field.schema());
-    }
-    Schema.Field field = schema.getField(key.column());
-    String lookupName = key.column();
-    if (field == null) {
-      field = findFieldIgnoreCase(schema, key.column());
-      if (field != null) {
-        lookupName = field.name();
-      }
-    }
-    if (field != null) {
-      return AvroCoercions.unwrap(record.get(lookupName), field.schema());
-    }
-    Expression expression = orderExpressionFor(key.column());
-    if (expression != null) {
-      ensureValueEvaluator(schema);
-      return valueEvaluator.eval(expression, record);
-    }
-    return null;
   }
 
   private Schema.Field findFieldIgnoreCase(Schema schema, String name) {
@@ -734,10 +825,6 @@ public final class QueryProcessor implements AutoCloseable {
       rec = nextRawRecord();
     }
     return null;
-  }
-
-  List<String> projection() {
-    return projection;
   }
 
   /**
@@ -875,27 +962,19 @@ public final class QueryProcessor implements AutoCloseable {
     return RelationalKeys.row(key, false);
   }
 
-  private static List<String> augmentProjectionWithOrderColumns(List<String> projection, List<SqlParser.OrderKey> order,
-      List<SqlParser.OrderKey> preOrder) {
-    List<String> merged = new ArrayList<>(projection == null ? List.of() : projection);
-    addOrderColumns(merged, order);
-    addOrderColumns(merged, preOrder);
-    return merged;
-  }
-
-  private static void addOrderColumns(List<String> target, List<SqlParser.OrderKey> keys) {
-    if (keys == null) {
-      return;
-    }
-    Set<String> existing = new LinkedHashSet<>(target);
-    for (SqlParser.OrderKey key : keys) {
-      if (key == null) {
-        continue;
-      }
-      String col = key.column();
-      if (col != null && existing.add(col)) {
-        target.add(col);
-      }
-    }
+  /**
+   * Derives the DISTINCT key list for a wildcard select. The keys are the input
+   * fields, never the ORDER BY references: an ordering key is not a select-list
+   * column, whatever its textual form (position, quoted, or case-variant), and
+   * must not participate in deduplication (#611).
+   *
+   * @param schema
+   *          input schema of the records, may be {@code null} when unknown
+   * @param fallback
+   *          the projected columns, used only when the schema is unknown
+   * @return the physical fields a {@code SELECT DISTINCT *} deduplicates on
+   */
+  private static List<String> defaultDistinctColumns(Schema schema, List<String> fallback) {
+    return schema == null ? fallback : List.copyOf(computeProjection(List.of("*"), schema));
   }
 }

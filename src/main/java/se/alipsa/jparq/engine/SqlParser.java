@@ -338,9 +338,10 @@ public final class SqlParser {
    * ORDER BY key for set operation queries supporting either column positions or
    * labels or full expressions.
    *
-   * @param columnIndex
-   *          1-based column index when ORDER BY uses positional syntax,
-   *          {@code null} otherwise
+   * @param ordinal
+   *          the ordinal literal exactly as written when ORDER BY uses positional
+   *          syntax, validated at parse time and range-checked against the set
+   *          result at execution, {@code null} otherwise
    * @param columnLabel
    *          column label when ORDER BY references a column name, {@code null}
    *          otherwise
@@ -352,23 +353,8 @@ public final class SqlParser {
    * @param nullOrdering
    *          explicit NULL placement, or {@code null} for the default
    */
-  public record SetOrder(Integer columnIndex, String columnLabel, boolean asc, Expression expression,
+  public record SetOrder(String ordinal, String columnLabel, boolean asc, Expression expression,
       OrderByElement.NullOrdering nullOrdering) {
-    /**
-     * Creates an order directive using default NULL placement.
-     *
-     * @param columnIndex
-     *          1-based position, or {@code null}
-     * @param columnLabel
-     *          output label, or {@code null}
-     * @param asc
-     *          whether to sort ascending
-     * @param expression
-     *          computed sort expression, or {@code null}
-     */
-    public SetOrder(Integer columnIndex, String columnLabel, boolean asc, Expression expression) {
-      this(columnIndex, columnLabel, asc, expression, null);
-    }
   }
 
   /**
@@ -1448,9 +1434,38 @@ public final class SqlParser {
       components.add(new SetComponent(component, operator, body.toString()));
     }
     List<SetOrder> orderBy = parseSetOrderBy(list.getOrderByElements());
+    validateSetOrderPositions(orderBy, components.getFirst());
     int limit = resolveLimit(list.getLimit(), list.getFetch());
     int offset = extractOffset(list.getOffset());
     return new SetQuery(List.copyOf(components), orderBy, limit, offset, List.copyOf(ctes));
+  }
+
+  /**
+   * Range-checks positional set ORDER BY references at preparation when the first
+   * branch fixes the result width: an explicit select list determines the width,
+   * while a wildcard branch defers the check to execution.
+   *
+   * @param orderBy
+   *          the parsed set ORDER BY keys
+   * @param first
+   *          the first set component, whose projection determines the result
+   *          width
+   * @throws IllegalArgumentException
+   *           if a positional reference is outside the known width, with SQLState
+   *           42000 naming the position as written
+   */
+  private static void validateSetOrderPositions(List<SetOrder> orderBy, SetComponent first) {
+    if (orderBy.isEmpty() || !(first.query() instanceof Select select)) {
+      return;
+    }
+    if (select.labels().isEmpty() || !select.qualifiedWildcards().isEmpty()) {
+      return;
+    }
+    for (SetOrder order : orderBy) {
+      if (order.ordinal() != null) {
+        OrderingUtil.position(order.ordinal(), select.labels().size());
+      }
+    }
   }
 
   /**
@@ -1492,6 +1507,10 @@ public final class SqlParser {
    * @param orderByElements
    *          raw ORDER BY elements from the parser
    * @return normalized {@link SetOrder} definitions
+   * @throws IllegalArgumentException
+   *           if a positional reference cannot be represented or is zero, with
+   *           SQLState 42000; range checks against the set result run at
+   *           execution, also for an empty result
    */
   private static List<SetOrder> parseSetOrderBy(List<OrderByElement> orderByElements) {
     if (orderByElements == null || orderByElements.isEmpty()) {
@@ -1500,18 +1519,22 @@ public final class SqlParser {
     List<SetOrder> orders = new ArrayList<>(orderByElements.size());
     for (OrderByElement element : orderByElements) {
       Expression expression = element.getExpression();
-      Integer columnIndex = null;
+      String ordinal = null;
       String columnLabel = null;
       Expression orderExpression = null;
       if (expression instanceof LongValue value) {
-        columnIndex = value.getBigIntegerValue().intValue();
+        // The literal stays as written so the execution-time range check can
+        // name it verbatim; the parse rejects zero and unrepresentable values
+        // at preparation.
+        ordinal = value.getStringValue();
+        OrderingUtil.position(ordinal);
       } else if (expression instanceof Column column) {
         columnLabel = column.getColumnName();
       } else {
         orderExpression = expression;
       }
       boolean asc = !element.isAscDescPresent() || element.isAsc();
-      orders.add(new SetOrder(columnIndex, columnLabel, asc, orderExpression, element.getNullOrdering()));
+      orders.add(new SetOrder(ordinal, columnLabel, asc, orderExpression, element.getNullOrdering()));
     }
     return List.copyOf(orders);
   }
@@ -2134,6 +2157,7 @@ public final class SqlParser {
 
     boolean selectAll = false;
     int selectIndex = 0;
+    List<QualifiedWildcard> starWildcards = new ArrayList<>();
     for (SelectItem<?> item : selectItems) {
       String text = item.toString().trim();
       Expression expr = item.getExpression();
@@ -2153,8 +2177,16 @@ public final class SqlParser {
         continue;
       }
       if (expr instanceof AllColumns) {
-        selectAll = true;
-        break;
+        String qualifier = singleInputQualifier(tableRefs);
+        if (qualifier == null) {
+          selectAll = true;
+          break;
+        }
+        // A * mixed with other items expands with the input's columns at
+        // preparation, keeping its position in the select list.
+        starWildcards.add(new QualifiedWildcard(qualifier, extractSourcePosition(item), selectIndex, qualifier, true));
+        selectIndex++;
+        continue;
       }
 
       if (tableRefs.size() == 1) {
@@ -2194,15 +2226,40 @@ public final class SqlParser {
       selectIndex++;
     }
 
-    if (selectAll) {
+    if (selectAll || (starWildcards.size() == 1 && labels.isEmpty() && qualifiedWildcards.isEmpty())) {
+      // A lone * expands from the input schema at execution time, when the
+      // full record width is known.
+      selectAll = true;
       labels = List.of();
       physicalCols = List.of();
       expressions = List.of();
       expressionOrder = List.of();
+    } else {
+      qualifiedWildcards.addAll(starWildcards);
     }
 
     return new Projection(labels, physicalCols, expressions, List.copyOf(expressionOrder),
         List.copyOf(qualifiedWildcards), selectAll);
+  }
+
+  /**
+   * Resolves the qualifier an unqualified {@code *} expands against when the
+   * query reads a single input.
+   *
+   * @param tableRefs
+   *          table references participating in the query
+   * @return the single input's alias or table name, or {@code null} when the
+   *         query has several inputs or the input has no usable name
+   */
+  private static String singleInputQualifier(List<TableReference> tableRefs) {
+    if (tableRefs == null || tableRefs.size() != 1) {
+      return null;
+    }
+    TableReference reference = tableRefs.getFirst();
+    if (!reference.joinGroup().isEmpty()) {
+      return null;
+    }
+    return reference.tableAlias() != null ? reference.tableAlias() : reference.tableName();
   }
 
   /**
@@ -2246,7 +2303,9 @@ public final class SqlParser {
    *          that qualifier
    * @return a {@link Select} instance where each qualified wildcard has been
    *         replaced with concrete column projections and ordering references
-   *         resolved against the complete output
+   *         resolved against the complete output; an unqualified {@code *} over
+   *         duplicate output names instead reverts the select to execution-time
+   *         wildcard expansion, dropping the other select items (#605, #609)
    * @throws IllegalArgumentException
    *           if a wildcard qualifier is unknown or an ordering label is
    *           ambiguous
@@ -2277,12 +2336,21 @@ public final class SqlParser {
     }
 
     int fallbackIndex = expressions.size();
+    boolean multipleTables = select.hasMultipleTables();
     for (QualifiedWildcard wildcard : select.qualifiedWildcards()) {
       String expressionQualifier = canonicalQualifier(wildcard.qualifierIdentifier(), select.tableReferences());
       String qualifier = stripCompositeIdentifierQuotes(expressionQualifier);
       List<QualifiedExpansionColumn> columns = resolveQualifierColumns(qualifier, normalized);
       if (columns == null || columns.isEmpty()) {
         throw new IllegalArgumentException("Qualified wildcard references unknown qualifier: " + qualifier);
+      }
+      boolean duplicateLabels = hasDuplicateLabels(columns);
+      if (wildcard.unqualifiedStar() && duplicateLabels) {
+        // An unqualified * over duplicate output names cannot expand without
+        // making every reference to them ambiguous (#605). Keep the
+        // execution-time wildcard expansion, which drops the other select
+        // items (#609), rather than failing a previously working query.
+        return asSelectAll(select);
       }
       int orderIndex = wildcard.selectListIndex() >= 0 ? wildcard.selectListIndex() : fallbackIndex;
       if (wildcard.selectListIndex() < 0) {
@@ -2296,7 +2364,12 @@ public final class SqlParser {
         // Labels can be arbitrary expression text; keep them intact instead of
         // letting the parser treat embedded dots as multipart name separators.
         column.setName(label, false);
-        if (qualifier != null && !qualifier.isBlank()) {
+        // A single input needs no qualifier: unqualified references bind like
+        // explicit select items, so a wildcard column and an explicit
+        // reference to the same column are the same ordering expression.
+        // Duplicate labels keep the qualifier so their references stay
+        // rejected (#605).
+        if ((multipleTables || duplicateLabels) && qualifier != null && !qualifier.isBlank()) {
           Table table = new Table();
           table.setName(expressionQualifier, false);
           column.setTable(table);
@@ -2337,6 +2410,39 @@ public final class SqlParser {
             ? select.preOrderBy()
             : resolveOrderKeys(select.preOrderBy(), labelCopy, expressionCopy, null),
         select.tableReferences(), select.commonTableExpressions());
+  }
+
+  /**
+   * Reports whether expanded wildcard columns repeat an output label.
+   *
+   * @param columns
+   *          the wildcard's ordered column definitions
+   * @return true when two columns share a lookup key
+   */
+  private static boolean hasDuplicateLabels(List<QualifiedExpansionColumn> columns) {
+    Set<String> seen = new LinkedHashSet<>();
+    for (QualifiedExpansionColumn column : columns) {
+      if (!seen.add(Identifier.lookupKey(column.label()))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Reverts a select to the wildcard-only projection shape whose columns expand
+   * from the input at execution time.
+   *
+   * @param select
+   *          the select to revert
+   * @return the select without explicit projection items or pending wildcards
+   */
+  private static Select asSelectAll(Select select) {
+    return new Select(List.of(), List.of(), select.table(), select.tableAlias(), select.where(), select.limit(),
+        select.offset(), select.orderBy(), select.distinct(), select.innerDistinct(), select.innerDistinctColumns(),
+        List.of(), List.of(), List.of(), select.groupByExpressions(), select.groupingSets(), select.having(),
+        select.preLimit(), select.preOffset(), select.preOrderBy(), select.tableReferences(),
+        select.commonTableExpressions());
   }
 
   private static Map<String, List<QualifiedExpansionColumn>> normaliseQualifierColumns(
@@ -2592,7 +2698,8 @@ public final class SqlParser {
    * @return a list of {@link OrderKey} objects representing the resolved ORDER BY
    *         keys; an empty list if the query has no ORDER BY clause
    * @throws IllegalArgumentException
-   *           if a referenced output label is ambiguous or an ordinal is invalid
+   *           if a referenced output label is ambiguous, with SQLState 42702, or
+   *           an ordinal is invalid, with SQLState 42000
    */
   private static List<OrderKey> computeOrderKeys(PlainSelect ps, List<String> labels, List<Expression> expressions,
       List<TableReference> tableRefs) {
@@ -2623,8 +2730,8 @@ public final class SqlParser {
         orderKeys.add(new OrderKey(column, asc, qualifier, element.getNullOrdering(), evaluation));
       }
     }
-    boolean pendingWildcards = ps.getSelectItems().stream()
-        .anyMatch(item -> item.getExpression() instanceof AllTableColumns);
+    boolean pendingWildcards = ps.getSelectItems().stream().anyMatch(
+        item -> item.getExpression() instanceof AllColumns || item.getExpression() instanceof AllTableColumns);
     boolean join = tableRefs.size() > 1 || tableRefs.stream().anyMatch(ref -> !ref.joinGroup().isEmpty());
     return pendingWildcards || join ? List.copyOf(orderKeys) : resolveOrderKeys(orderKeys, labels, expressions, null);
   }
@@ -2643,7 +2750,8 @@ public final class SqlParser {
    *          canonical column resolver for joins, or null for a single input
    * @return query with bound ordering keys
    * @throws IllegalArgumentException
-   *           if an ordering alias is ambiguous or cannot be safely expanded
+   *           if an ordering alias is ambiguous, with SQLState 42702, cannot be
+   *           safely expanded, or an ordinal is invalid, with SQLState 42000
    */
   public static Select resolveInputOrdering(Select select, Schema inputSchema,
       java.util.function.Function<Column, String> columnBinding) {
@@ -2674,7 +2782,8 @@ public final class SqlParser {
    *          canonical column resolver for joins, or null for a single input
    * @return ordering keys bound to the selected expressions
    * @throws IllegalArgumentException
-   *           if a label is ambiguous or a position is invalid
+   *           if a label is ambiguous, with SQLState 42702, or a position is
+   *           invalid, with SQLState 42000
    */
   private static List<OrderKey> resolveOrderKeys(List<OrderKey> keys, List<String> labels, List<Expression> expressions,
       java.util.function.Function<Column, String> columnBinding) {
@@ -2697,7 +2806,8 @@ public final class SqlParser {
    *          normalized input names, or null to defer expression aliases
    * @return ordering keys preserving input precedence inside expressions
    * @throws IllegalArgumentException
-   *           if an alias is ambiguous or unsafe to expand
+   *           if an alias is ambiguous, with SQLState 42702, or unsafe to expand
+   *           or a position is invalid, with SQLState 42000
    */
   private static List<OrderKey> resolveOrderKeys(List<OrderKey> keys, List<String> labels, List<Expression> expressions,
       java.util.function.Function<Column, String> columnBinding, Set<String> inputs) {
@@ -2724,11 +2834,12 @@ public final class SqlParser {
       int projectionIndex = key.projectionIndex();
       Expression selected = null;
       if (evaluation == null && qualifier == null && projectionIndex < 0) {
-        if (column != null && column.matches("[0-9]+")) {
-          int position = Integer.parseInt(column);
-          if (position < 1 || !labels.isEmpty() && position > labels.size()) {
-            throw new IllegalArgumentException("ORDER BY position is outside the select list: " + position);
-          }
+        if (OrderingUtil.isPosition(column)) {
+          // With an unknown output width the upper bound is deferred to
+          // execution, which validates the literal against the actual width.
+          int position = labels.isEmpty()
+              ? OrderingUtil.position(column)
+              : OrderingUtil.position(column, labels.size());
           if (!labels.isEmpty()) {
             selected = expressions.get(position - 1);
             projectionIndex = position - 1;

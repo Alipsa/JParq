@@ -358,6 +358,30 @@ public final class SqlExceptions {
   }
 
   /**
+   * Wraps an engine failure with the context that matches its classification: the
+   * classified context when the cause chain carries a recognized SQLState, the
+   * fallback context otherwise.
+   *
+   * @param classifiedContext
+   *          the operation context for a failure carrying a recognized
+   *          classification
+   * @param fallbackContext
+   *          the operation context for a failure without a recognized
+   *          classification
+   * @param failure
+   *          the original failure, retained as the cause
+   * @return the failure wrapped with the matching context, with the same
+   *         classification and detail rules as the two-argument wrap
+   */
+  public static SQLException wrap(String classifiedContext, String fallbackContext, Throwable failure) {
+    // The chain is walked once and reused by the wrapped call through the
+    // precomputed links.
+    List<Throwable> chain = causeChain(failure);
+    return wrap(findSqlStateFailure(chain) == null ? fallbackContext : classifiedContext, failure,
+        UnaryOperator.identity(), chain);
+  }
+
+  /**
    * Preserves JDBC classifications while rendering all diagnostic text for the
    * caller.
    *
@@ -378,7 +402,26 @@ public final class SqlExceptions {
    *         equal to the context, it is returned unchanged with its own text
    */
   public static SQLException wrap(String context, Throwable failure, UnaryOperator<String> diagnostics) {
-    List<Throwable> chain = causeChain(failure);
+    return wrap(context, failure, diagnostics, causeChain(failure));
+  }
+
+  /**
+   * Wraps an engine failure using cause chain links computed by the caller.
+   *
+   * @param context
+   *          the failed operation
+   * @param failure
+   *          the original failure, retained as the cause
+   * @param diagnostics
+   *          renderer for context and nested messages, accepting null text
+   * @param chain
+   *          the failure's cause chain links, as computed by
+   *          {@link #causeChain(Throwable)}
+   * @return the wrapped failure, exactly as the public overload without
+   *         precomputed links would wrap it
+   */
+  private static SQLException wrap(String context, Throwable failure, UnaryOperator<String> diagnostics,
+      List<Throwable> chain) {
     SQLException classified = findSqlStateFailure(chain);
     if (classified != null && failure == classified && Objects.equals(context, classified.getMessage())
         && Objects.equals(context, diagnostics.apply(context))) {

@@ -1,13 +1,93 @@
 package se.alipsa.jparq.engine;
 
+import java.util.regex.Pattern;
+
 import net.sf.jsqlparser.statement.select.OrderByElement;
 
 /**
- * Utility methods for ORDER BY related comparisons.
+ * Utility methods for ORDER BY related comparisons and positional references.
  */
 public final class OrderingUtil {
 
+  /**
+   * An unquoted run of digits: the textual form of an ORDER BY positional
+   * reference. Quoted values such as {@code "1"} are identifiers, not positions.
+   */
+  private static final Pattern POSITIONAL_REFERENCE = Pattern.compile("[0-9]+");
+
   private OrderingUtil() {
+  }
+
+  /**
+   * Determines whether an ORDER BY key names a positional reference rather than a
+   * column.
+   *
+   * @param column
+   *          the ORDER BY key text to test, may be {@code null}
+   * @return {@code true} when the key is an unquoted run of digits
+   */
+  public static boolean isPosition(String column) {
+    return column != null && POSITIONAL_REFERENCE.matcher(column).matches();
+  }
+
+  /**
+   * Parses an ORDER BY positional reference without an upper bound, rejecting
+   * zero or values above {@link Integer#MAX_VALUE} with the JDBC syntax
+   * classification instead of leaking a raw parse or arithmetic failure. No
+   * select list can be wider than {@link Integer#MAX_VALUE}, so representability
+   * is the only bound a deferred range check can skip.
+   *
+   * @param literal
+   *          the positional reference to parse
+   * @return the parsed position
+   * @throws IllegalArgumentException
+   *           if the reference does not name a position, with SQLState 42000
+   *           naming the position as written
+   */
+  public static int position(String literal) {
+    long value;
+    try {
+      value = Long.parseLong(literal);
+    } catch (NumberFormatException overflow) {
+      throw invalidPosition(literal);
+    }
+    if (value < 1 || value > Integer.MAX_VALUE) {
+      throw invalidPosition(literal);
+    }
+    return (int) value;
+  }
+
+  /**
+   * Parses an ORDER BY positional reference, rejecting references outside 1
+   * through the largest acceptable position with the JDBC syntax classification
+   * instead of leaking a raw parse or arithmetic failure.
+   *
+   * @param literal
+   *          the positional reference to parse
+   * @param maximum
+   *          the largest acceptable position, zero when nothing is acceptable
+   * @return the parsed position
+   * @throws IllegalArgumentException
+   *           if the reference does not name a position within 1 through the
+   *           maximum, with SQLState 42000 naming the position as written
+   */
+  public static int position(String literal, int maximum) {
+    int position = position(literal);
+    if (position > maximum) {
+      throw invalidPosition(literal);
+    }
+    return position;
+  }
+
+  /**
+   * Creates the syntax classification for an invalid ORDER BY position.
+   *
+   * @param position
+   *          the invalid position to name in the message, as written
+   * @return an engine exception carrying SQLState 42000
+   */
+  private static IllegalArgumentException invalidPosition(String position) {
+    return SqlExceptions.syntaxFailure("ORDER BY position is outside the select list: " + position);
   }
 
   /**
