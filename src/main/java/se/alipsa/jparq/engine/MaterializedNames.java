@@ -84,6 +84,9 @@ public final class MaterializedNames {
 
   /**
    * Builds an index of visible SQL names; empty values mark ambiguous names.
+   * Names declared in both quoting forms, such as {@code x} and {@code "x"}, are
+   * the same identifier under lowercase folding, so both keys are marked
+   * ambiguous when they bind different fields.
    *
    * @param schema
    *          source schema, or null for an unavailable schema
@@ -95,6 +98,14 @@ public final class MaterializedNames {
       for (Schema.Field field : schema.getFields()) {
         if (isVisible(field)) {
           index.merge(lookupKey(field), field.name(), (left, right) -> left.equals(right) ? left : "");
+        }
+      }
+      for (String key : Set.copyOf(index.keySet())) {
+        String alternative = ColumnMappingUtil.alternativeColumnKey(key);
+        String field = alternative == null ? null : index.get(alternative);
+        if (field != null && !field.equals(index.get(key))) {
+          index.put(key, "");
+          index.put(alternative, "");
         }
       }
     }

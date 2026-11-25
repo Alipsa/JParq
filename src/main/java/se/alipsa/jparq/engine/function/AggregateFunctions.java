@@ -762,7 +762,7 @@ public final class AggregateFunctions {
     GroupedExpression.validate(expression, operand -> {
       if (operand instanceof Column column && findGroupIndex(column, groupIndexByText, groups, columnBinding) == null) {
         boolean outputAlias = column.getTable() == null
-            && aliases.contains(Identifier.lookupKey(column.getColumnName()));
+            && containsEquivalentKey(aliases, Identifier.lookupKey(column.getColumnName()));
         if ((inputPrecedence || !outputAlias) && columnBinding != null && columnBinding.resolve(column) != null) {
           throw groupingFailure("Ungrouped input column in " + clause + ": " + column
               + "; columns must appear in the GROUP BY clause or be used in an aggregate");
@@ -774,6 +774,26 @@ public final class AggregateFunctions {
       }
       return isGroupOperand(operand, groupIndexByText, groups, columnBinding);
     });
+  }
+
+  /**
+   * Tests whether a key set contains a lookup key or its quoting-equivalent form.
+   *
+   * @param keys
+   *          normalized lookup keys
+   * @param key
+   *          normalized lookup key of the reference, or null
+   * @return true when the key or its opposite quoting form is present
+   */
+  private static boolean containsEquivalentKey(Set<String> keys, String key) {
+    if (key == null) {
+      return false;
+    }
+    if (keys.contains(key)) {
+      return true;
+    }
+    String alternative = ColumnMappingUtil.alternativeColumnKey(key);
+    return alternative != null && keys.contains(alternative);
   }
 
   /**
@@ -3552,8 +3572,15 @@ public final class AggregateFunctions {
         return null;
       }
       String key = Identifier.lookupKey(name);
-      if (key == null || !labelLookup.containsKey(key)) {
+      if (key == null) {
         throw syntaxFailure("Unknown or ungrouped column in grouped expression: " + name);
+      }
+      if (!labelLookup.containsKey(key)) {
+        String alternative = ColumnMappingUtil.alternativeColumnKey(key);
+        if (alternative == null || !labelLookup.containsKey(alternative)) {
+          throw syntaxFailure("Unknown or ungrouped column in grouped expression: " + name);
+        }
+        key = alternative;
       }
       return resolveScalarValue(labelLookup.get(key));
     }

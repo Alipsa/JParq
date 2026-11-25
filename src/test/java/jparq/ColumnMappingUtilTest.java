@@ -12,6 +12,7 @@ import java.util.Map;
 import org.apache.avro.SchemaBuilder;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
+import se.alipsa.jparq.engine.MaterializedNames;
 
 /** Tests for {@link ColumnMappingUtil}. */
 class ColumnMappingUtilTest {
@@ -43,13 +44,46 @@ class ColumnMappingUtilTest {
   @Test
   void quotedLowercaseKeysHaveUnquotedAlternatives() {
     assertEquals("U:m", ColumnMappingUtil.alternativeColumnKey("Q:m"));
+    assertEquals("Q:m", ColumnMappingUtil.alternativeColumnKey("U:m"));
     assertNull(ColumnMappingUtil.alternativeColumnKey("Q:M"));
-    assertNull(ColumnMappingUtil.alternativeColumnKey("U:m"));
     assertNull(ColumnMappingUtil.alternativeColumnKey(null));
     var mappings = Map.of("U:m", Map.of("U:x", "mx"), "Q:m", Map.of("U:x", "quoted_mx"));
     assertEquals("quoted_mx", ColumnMappingUtil.qualifierColumns(mappings, "\"m\"").get("U:x"));
     assertEquals("mx", ColumnMappingUtil.qualifierColumns(Map.of("U:m", Map.of("U:x", "mx")), "\"m\"").get("U:x"));
     assertEquals(Map.of(), ColumnMappingUtil.qualifierColumns(mappings, "\"M\""));
+  }
+
+  /** Resolves either quoting form, preferring the exact key. */
+  @Test
+  void equivalentColumnResolvesBothQuotingForms() {
+    var quoted = Map.of("Q:x", "quoted_field");
+    assertEquals("quoted_field", ColumnMappingUtil.equivalentColumn(quoted, "U:x"));
+    assertEquals("quoted_field", ColumnMappingUtil.equivalentColumn(quoted, "Q:x"));
+    var unquoted = Map.of("U:x", "unquoted_field");
+    assertEquals("unquoted_field", ColumnMappingUtil.equivalentColumn(unquoted, "Q:x"));
+    assertEquals("unquoted_field", ColumnMappingUtil.equivalentColumn(unquoted, "U:x"));
+    var both = Map.of("Q:x", "quoted_field", "U:x", "unquoted_field");
+    assertEquals("unquoted_field", ColumnMappingUtil.equivalentColumn(both, "U:x"));
+    assertEquals("quoted_field", ColumnMappingUtil.equivalentColumn(both, "Q:x"));
+    var mixedCase = Map.of("Q:X", "mixed_field");
+    assertNull(ColumnMappingUtil.equivalentColumn(mixedCase, "U:x"));
+    assertEquals("mixed_field", ColumnMappingUtil.equivalentColumn(mixedCase, "Q:X"));
+    assertNull(ColumnMappingUtil.equivalentColumn(quoted, null));
+    assertNull(ColumnMappingUtil.equivalentColumn(null, "U:x"));
+  }
+
+  /** Marks names declared in both quoting forms as ambiguous. */
+  @Test
+  void lookupIndexMarksEquivalentQuotingFormsAmbiguous() {
+    var both = SchemaBuilder.record("t").fields().requiredInt("a").requiredInt("b").endRecord();
+    both.getField("a").addProp(MaterializedNames.LOOKUP_KEY, "U:x");
+    both.getField("b").addProp(MaterializedNames.LOOKUP_KEY, "Q:x");
+    var index = MaterializedNames.lookupIndex(both);
+    assertEquals("", index.get("U:x"));
+    assertEquals("", index.get("Q:x"));
+    var single = SchemaBuilder.record("t").fields().requiredInt("a").endRecord();
+    single.getField("a").addProp(MaterializedNames.LOOKUP_KEY, "Q:x");
+    assertEquals(Map.of("Q:x", "a"), MaterializedNames.lookupIndex(single));
   }
 
   /**

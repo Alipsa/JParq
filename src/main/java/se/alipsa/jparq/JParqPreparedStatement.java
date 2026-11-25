@@ -6140,12 +6140,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     Map<String, String> names = qualifier == null || qualifier.isBlank() || qualified.isEmpty()
         ? index
         : ColumnMappingUtil.qualifierColumns(qualified, qualifier);
-    String key = Identifier.lookupKey(column);
-    String alternative = ColumnMappingUtil.alternativeColumnKey(key);
-    String canonical = names.get(key);
-    if (canonical == null && alternative != null) {
-      canonical = names.get(alternative);
-    }
+    String canonical = ColumnMappingUtil.equivalentColumn(names, Identifier.lookupKey(column));
     if ("".equals(canonical)) {
       throw SqlExceptions.ambiguousColumn(qualifier == null ? column : qualifier + "." + column);
     }
@@ -6350,9 +6345,9 @@ public class JParqPreparedStatement implements PreparedStatement {
         continue;
       }
       boolean present = containsColumn(available, normalized);
-      boolean labelMatch = normalizedLabels.contains(normalized);
+      boolean labelMatch = containsColumn(normalizedLabels, normalized);
       boolean missingReference = !normalizedReferences.contains(normalized);
-      boolean aliasOnly = labelMatch && (missingReference || mappedAliases.contains(normalized));
+      boolean aliasOnly = labelMatch && (missingReference || containsColumn(mappedAliases, normalized));
       if (!present && !aliasOnly) {
         missing.add(column);
       }
@@ -6364,7 +6359,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Matches a normalized reference using the existing quoted lowercase fallback.
+   * Matches a normalized reference against a key set using the quoting-equivalent
+   * fallback.
    *
    * @param available
    *          visible SQL lookup keys

@@ -150,21 +150,16 @@ public final class ColumnMappingUtil {
     }
 
     if (!qualifierColumnMapping.isEmpty()) {
-      String canonical = unqualifiedColumnMapping.get(normalizedColumn);
+      // Exact keys take precedence across every source before the
+      // quoting-equivalent fallback so correlation mappings that hold quoted
+      // SQL references do not shadow unquoted source fields.
+      String canonical = resolveVisibleColumn(normalizedColumn, unqualifiedColumnMapping, qualifierColumnMapping,
+          caseInsensitiveIndex);
       if (canonical == null) {
         String alternative = alternativeColumnKey(normalizedColumn);
         if (alternative != null) {
-          canonical = unqualifiedColumnMapping.get(alternative);
-        }
-      }
-      if (canonical != null) {
-        return canonical;
-      }
-      canonical = resolveUnqualified(normalizedColumn, qualifierColumnMapping, caseInsensitiveIndex);
-      if (canonical == null) {
-        String alternative = alternativeColumnKey(normalizedColumn);
-        if (alternative != null) {
-          canonical = resolveUnqualified(alternative, qualifierColumnMapping, caseInsensitiveIndex);
+          canonical = resolveVisibleColumn(alternative, unqualifiedColumnMapping, qualifierColumnMapping,
+              caseInsensitiveIndex);
         }
       }
       if (canonical != null) {
@@ -173,14 +168,31 @@ public final class ColumnMappingUtil {
       throw SqlExceptions.ambiguousColumn(columnName);
     }
 
-    String canonical = caseInsensitiveIndex.get(normalizedColumn);
-    if (canonical == null) {
-      String alternative = alternativeColumnKey(normalizedColumn);
-      if (alternative != null) {
-        canonical = caseInsensitiveIndex.get(alternative);
-      }
-    }
+    String canonical = equivalentColumn(caseInsensitiveIndex, normalizedColumn);
     return canonical != null ? canonical : columnName;
+  }
+
+  /**
+   * Resolves a normalized key against the unqualified mapping, the qualifier
+   * mappings, and the fallback index using exact key matches only.
+   *
+   * @param key
+   *          normalized column lookup key
+   * @param unqualifiedColumnMapping
+   *          mappings for unqualified SQL names
+   * @param qualifierColumnMapping
+   *          mappings for qualified SQL names
+   * @param caseInsensitiveIndex
+   *          fallback SQL name index
+   * @return the bound column or null when the exact key is absent everywhere
+   */
+  private static String resolveVisibleColumn(String key, Map<String, String> unqualifiedColumnMapping,
+      Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> caseInsensitiveIndex) {
+    String canonical = unqualifiedColumnMapping.get(key);
+    if (canonical != null) {
+      return canonical;
+    }
+    return resolveUnqualified(key, qualifierColumnMapping, caseInsensitiveIndex);
   }
 
   private static String resolveUnqualified(String normalizedColumn,
@@ -269,13 +281,7 @@ public final class ColumnMappingUtil {
       }
     }
 
-    String canonical = unqualifiedMapping.get(normalizedColumn);
-    if (canonical == null) {
-      String alternative = alternativeColumnKey(normalizedColumn);
-      if (alternative != null) {
-        canonical = unqualifiedMapping.get(alternative);
-      }
-    }
+    String canonical = equivalentColumn(unqualifiedMapping, normalizedColumn);
     if (canonical != null) {
       return canonical;
     }
@@ -373,13 +379,7 @@ public final class ColumnMappingUtil {
 
     Map<String, String> mapping = qualifierColumns(qualifierColumnMapping, normalizedQualifier);
     if (mapping == null || mapping.isEmpty()) {
-      String fallback = caseInsensitiveIndex.get(normalizedColumn);
-      if (fallback == null) {
-        String alternative = alternativeColumnKey(normalizedColumn);
-        if (alternative != null) {
-          fallback = caseInsensitiveIndex.get(alternative);
-        }
-      }
+      String fallback = equivalentColumn(caseInsensitiveIndex, normalizedColumn);
       if ("".equals(fallback)) {
         throw SqlExceptions
             .syntaxFailure("Unknown table qualifier '" + qualifier + "' for column '" + columnName + "'");
@@ -391,13 +391,7 @@ public final class ColumnMappingUtil {
           + "' (available columns: " + caseInsensitiveIndex.keySet() + ")");
     }
 
-    String canonical = mapping.get(normalizedColumn);
-    if (canonical == null) {
-      String alternative = alternativeColumnKey(normalizedColumn);
-      if (alternative != null) {
-        canonical = mapping.get(alternative);
-      }
-    }
+    String canonical = equivalentColumn(mapping, normalizedColumn);
     if (canonical != null) {
       return canonical;
     }
@@ -427,15 +421,7 @@ public final class ColumnMappingUtil {
     if (mapping.isEmpty()) {
       return null;
     }
-    String canonical = mapping.get(normalizedColumn);
-    if (canonical != null) {
-      return canonical;
-    }
-    String alternative = alternativeColumnKey(normalizedColumn);
-    if (alternative == null) {
-      return null;
-    }
-    return mapping.get(alternative);
+    return equivalentColumn(mapping, normalizedColumn);
   }
 
   private static boolean looksLikeLookupKey(String value) {
@@ -528,21 +514,21 @@ public final class ColumnMappingUtil {
    * @return equivalent key, or null when no fallback is allowed
    */
   public static String alternativeQualifierKey(String key) {
-    if (key != null && key.startsWith("U:") && key.length() > 2) {
-      return "Q:" + key.substring(2);
-    }
     return alternativeColumnKey(key);
   }
 
   /**
-   * Resolves a quoted lowercase identifier key to its unquoted equivalent.
+   * Finds the equivalent identifier key with the opposite quoting form. A quoted
+   * lowercase name is equivalent to its unquoted form and vice versa; quoted
+   * mixed-case names have no fallback.
    *
    * @param normalizedColumn
    *          normalized column or qualifier lookup key
-   * @return the unquoted fallback key, or null when no fallback is allowed
+   * @return the fallback key with the opposite quoting form, or null when no
+   *         fallback is allowed
    */
   public static String alternativeColumnKey(String normalizedColumn) {
-    if (normalizedColumn == null || !normalizedColumn.startsWith("Q:") || normalizedColumn.length() <= 2) {
+    if (normalizedColumn == null || normalizedColumn.length() <= 2) {
       return null;
     }
     String body = normalizedColumn.substring(2);
@@ -550,6 +536,37 @@ public final class ColumnMappingUtil {
     if (!body.equals(lowerCase)) {
       return null;
     }
-    return "U:" + lowerCase;
+    if (normalizedColumn.startsWith("Q:")) {
+      return "U:" + lowerCase;
+    }
+    if (normalizedColumn.startsWith("U:")) {
+      return "Q:" + lowerCase;
+    }
+    return null;
+  }
+
+  /**
+   * Resolves a normalized column key against a column mapping, preferring the
+   * exact key before the quoting-equivalent form. Ambiguity between both quoting
+   * forms is marked in the mapping itself, e.g. by
+   * {@link MaterializedNames#lookupIndex(org.apache.avro.Schema)}.
+   *
+   * @param mapping
+   *          column mapping keyed by normalized lookup keys
+   * @param normalizedColumn
+   *          normalized column lookup key
+   * @return the bound column, the empty string ambiguity marker, or null when
+   *         neither form is present
+   */
+  public static String equivalentColumn(Map<String, String> mapping, String normalizedColumn) {
+    if (mapping == null || normalizedColumn == null) {
+      return null;
+    }
+    String canonical = mapping.get(normalizedColumn);
+    if (canonical != null) {
+      return canonical;
+    }
+    String alternative = alternativeColumnKey(normalizedColumn);
+    return alternative == null ? null : mapping.get(alternative);
   }
 }

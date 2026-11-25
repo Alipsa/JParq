@@ -382,9 +382,10 @@ SQL:2016–2023.
 - Quoted lowercase column references resolve to unquoted lowercase columns:
   `SELECT "id" + 0 FROM optimized WHERE "id" = 1`. This also applies to `GROUP BY`, derived tables, CTEs, `VALUES`
   inputs, and computed join expressions with qualified duplicate column names.
+- Unquoted references resolve explicitly quoted lowercase materialized aliases, mirroring the reverse direction:
+  `SELECT x FROM (SELECT 1 AS "x") t`. This also applies to CTEs, `VALUES` inputs, joins, grouped queries, and set
+  operation `ORDER BY` labels.
 - Quoted mixed-case names require an exact case match.
-- Unquoted references to explicitly quoted lowercase materialized aliases, such as
-  `SELECT x FROM (SELECT 1 AS "x") t`, are not supported yet ([#338](https://github.com/Alipsa/JParq/issues/338)).
 - Lowercase CTE names can be declared or referenced with quotes, including in correlated subqueries:
   `WITH "c" AS (SELECT 1 AS x) SELECT x FROM c`.
 - Equivalent CTE names such as `c` and `"c"` in the same `WITH` list are rejected with SQLState `42000`. A nested
