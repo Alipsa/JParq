@@ -90,7 +90,7 @@ class CorrelatedQualifierResolutionTest {
     record.put("base_id", 9);
 
     Map<String, Map<String, String>> correlationContext = CorrelationContextBuilder.build(List.of("d"),
-        List.of("alias_id"), List.of("base_id"), Map.of());
+        List.of("alias_id"), List.of("base_id"), Map.of(), schema);
 
     SubqueryExecutor.SubqueryResult subqueryResult = new SubqueryExecutor.SubqueryResult(List.of("v"),
         List.of(List.of("ok")));

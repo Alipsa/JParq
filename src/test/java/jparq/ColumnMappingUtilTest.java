@@ -1,14 +1,17 @@
 package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.sql.SQLSyntaxErrorException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.apache.avro.SchemaBuilder;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
@@ -70,6 +73,33 @@ class ColumnMappingUtilTest {
     assertEquals("mixed_field", ColumnMappingUtil.equivalentColumn(mixedCase, "Q:X"));
     assertNull(ColumnMappingUtil.equivalentColumn(quoted, null));
     assertNull(ColumnMappingUtil.equivalentColumn(null, "U:x"));
+  }
+
+  /** Matches either lowercase quoting form, but never a mixed-case one. */
+  @Test
+  void containsEquivalentKeyMatchesBothQuotingForms() {
+    assertTrue(ColumnMappingUtil.containsEquivalentKey(Set.of("Q:x"), "U:x"));
+    assertTrue(ColumnMappingUtil.containsEquivalentKey(Set.of("U:x"), "Q:x"));
+    assertTrue(ColumnMappingUtil.containsEquivalentKey(Set.of("Q:x"), "Q:x"));
+    assertTrue(ColumnMappingUtil.containsEquivalentKey(Set.of("U:x"), "U:x"));
+    assertFalse(ColumnMappingUtil.containsEquivalentKey(Set.of("Q:X"), "U:x"));
+    assertFalse(ColumnMappingUtil.containsEquivalentKey(Set.of("U:x"), "Q:X"));
+    assertFalse(ColumnMappingUtil.containsEquivalentKey(Set.of(), "U:x"));
+    assertFalse(ColumnMappingUtil.containsEquivalentKey(Set.of("U:y"), "U:x"));
+    assertFalse(ColumnMappingUtil.containsEquivalentKey(null, "U:x"));
+    assertFalse(ColumnMappingUtil.containsEquivalentKey(Set.of("U:x"), null));
+  }
+
+  /** Prefers the declared field key, folding names without a matching field. */
+  @Test
+  void schemaAwareLookupKeyPrefersDeclaredFieldKeys() {
+    var schema = SchemaBuilder.record("t").fields().requiredInt("X").requiredInt("plain").endRecord();
+    schema.getField("X").addProp(MaterializedNames.LOOKUP_KEY, "Q:X");
+    assertEquals("Q:X", MaterializedNames.lookupKey(schema, "X"));
+    assertEquals("U:plain", MaterializedNames.lookupKey(schema, "plain"));
+    assertEquals("U:missing", MaterializedNames.lookupKey(schema, "missing"));
+    assertEquals("Q:x", MaterializedNames.lookupKey(null, "\"x\""));
+    assertEquals("U:x", MaterializedNames.lookupKey(null, "x"));
   }
 
   /** Marks names declared in both quoting forms as ambiguous. */

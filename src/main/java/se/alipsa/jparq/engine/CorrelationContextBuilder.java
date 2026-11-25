@@ -21,31 +21,6 @@ public final class CorrelationContextBuilder {
   }
 
   /**
-   * Build a correlation mapping for the supplied qualifiers. Existing mappings
-   * are preserved, and any projected columns missing from the mapping are added
-   * using their canonical counterparts. This ensures the correlation context
-   * remains aware of the columns exposed in the projection, not just the raw
-   * schema fields supplied by the reader.
-   *
-   * @param qualifiers
-   *          qualifiers (tables or aliases) visible to the current query
-   * @param columnLabels
-   *          labels exposed by the projection in result-set order
-   * @param canonicalColumnNames
-   *          canonical names corresponding to {@code columnLabels}; falls back to
-   *          {@code columnLabels} when {@code null}
-   * @param existingMapping
-   *          qualifier to canonical column mapping provided by the reader (may be
-   *          {@code null})
-   * @return a normalized mapping containing all projected columns for each
-   *         qualifier
-   */
-  public static Map<String, Map<String, String>> build(List<String> qualifiers, List<String> columnLabels,
-      List<String> canonicalColumnNames, Map<String, Map<String, String>> existingMapping) {
-    return build(qualifiers, columnLabels, canonicalColumnNames, existingMapping, null);
-  }
-
-  /**
    * Build a correlation mapping for the supplied qualifiers, resolving the lookup
    * keys of projected names through the source schema when possible. Schema-aware
    * keys keep quoted declarations such as {@code "X"} distinct from their
