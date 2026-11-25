@@ -624,10 +624,10 @@ public final class QueryProcessor implements AutoCloseable {
     if (OrderingUtil.isPosition(column)) {
       // The bound is the wildcard projection of the input, not the record
       // width: a USING join keeps its peer copies of the join columns in the
-      // record but hides them from the select list. Positional references over
-      // a projection wider than the input are bound to their select-list
-      // expressions at preparation, so an unbound key always addresses the
-      // wildcard width.
+      // record but hides them from the select list. A single-input projection
+      // wider than the input binds its positional references at preparation,
+      // so a key left unbound here addresses a wildcard-only projection whose
+      // output width equals this visible width.
       List<String> visible = computeProjection(List.of("*"), schema);
       int ordinal = OrderingUtil.position(column, visible.size());
       Schema.Field field = schema.getField(visible.get(ordinal - 1));

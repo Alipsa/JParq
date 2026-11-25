@@ -1755,7 +1755,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           if executing any component fails or if set operation requirements
    *           are violated
    */
-  public JParqResultSet executeSetOperation() throws SQLException {
+  private JParqResultSet executeSetOperation() throws SQLException {
     if (parsedSetQuery == null) {
       throw new SQLException("Set operation query not available for execution");
     }

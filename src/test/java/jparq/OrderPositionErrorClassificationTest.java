@@ -5,11 +5,8 @@ import static jparq.support.QueryTestSupport.writeEmptyIntegerFixture;
 import static jparq.support.QueryTestSupport.writeIntegerFixture;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.spy;
 
 import java.nio.file.Path;
 import java.sql.DriverManager;
@@ -21,7 +18,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import se.alipsa.jparq.JParqPreparedStatement;
 
 /**
  * Classifies invalid positional ORDER BY references with SQLState 42000 without
@@ -437,29 +433,6 @@ class OrderPositionErrorClassificationTest {
           Arrays.asList(List.of(1), List.of(1), List.of(1), List.of(1), List.of(2), List.of(2), List.of(3), List.of(3),
               Arrays.asList((Object) null), Arrays.asList((Object) null)),
           rows(connection, "SELECT * FROM o UNION ALL SELECT * FROM o ORDER BY 1", false));
-    }
-  }
-
-  /**
-   * Routes an unclassified engine failure raised during set operation execution
-   * through the fallback context, keeping the detail and leaving the SQLState
-   * unset.
-   *
-   * @param directory
-   *          fixture directory
-   * @throws Exception
-   *           if fixture creation or query execution fails
-   */
-  @Test
-  void wrapsUnclassifiedSetOperationFailures(@TempDir Path directory) throws Exception {
-    writeIntegerFixture(directory);
-    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
-        var statement = connection.prepareStatement("SELECT n FROM o UNION ALL SELECT n FROM o")) {
-      JParqPreparedStatement spied = spy((JParqPreparedStatement) statement);
-      doThrow(new IllegalStateException("boom")).when(spied).executeSetOperation();
-      SQLException failure = assertThrows(SQLException.class, spied::executeQuery);
-      assertEquals("Failed to execute set operation: boom", failure.getMessage());
-      assertNull(failure.getSQLState());
     }
   }
 

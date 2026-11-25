@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.util.Arrays;
 import java.util.List;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -116,6 +117,82 @@ class MixedWildcardProjectionTest {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
       assertEquals(List.of(List.of(4L, 3), List.of(3L, 2), List.of(2L, 1), List.of(2L, 1)), rows(connection,
           "SELECT m, n FROM (SELECT *, n + 1 AS m FROM o WHERE n IS NOT NULL) d ORDER BY m DESC", prepared));
+    }
+  }
+
+  /**
+   * Orders by a column that the wildcard and an explicit item both project: the
+   * two output columns denote the same input column, so the reference is not
+   * ambiguous.
+   *
+   * @param prepared
+   *          whether to use a prepared statement
+   * @param directory
+   *          fixture directory
+   * @throws Exception
+   *           if fixture creation or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void ordersByAColumnRepeatedThroughTheWildcard(boolean prepared, @TempDir Path directory) throws Exception {
+    writeIntegerFixture(directory);
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      assertEquals(
+          Arrays.asList(List.of(1, 1), List.of(1, 1), List.of(2, 2), List.of(3, 3),
+              Arrays.asList((Object) null, (Object) null)),
+          rows(connection, "SELECT *, n FROM o ORDER BY n", prepared));
+    }
+  }
+
+  /**
+   * Keeps the execution-time wildcard expansion when the input exposes duplicate
+   * column names: expanding the star would make every reference to them ambiguous
+   * (#605), so the additional items are dropped as before #609 instead of failing
+   * the query.
+   *
+   * @param prepared
+   *          whether to use a prepared statement
+   * @param directory
+   *          fixture directory
+   * @throws Exception
+   *           if fixture creation or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void keepsTheWildcardFallbackOverDuplicateColumnNames(boolean prepared, @TempDir Path directory) throws Exception {
+    String join = "(VALUES (1, 10)) a(id, v) JOIN (VALUES (1, 20)) b(id, v) ON a.id = b.id";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      assertEquals(List.of(List.of(1, 10, 1, 20)),
+          rows(connection, "SELECT *, 1 AS k FROM (SELECT * FROM " + join + ") x", prepared));
+      assertEquals(List.of(List.of(1, 10, 20)),
+          rows(connection, "SELECT *, 1 AS k FROM (SELECT a.id, a.v, b.v FROM " + join + ") x", prepared));
+    }
+  }
+
+  /**
+   * Sorts a join wildcard-plus-expression projection by output position. Joins
+   * and LATERAL inputs still take the select-all path that drops the extra item
+   * (#609 remains open for them), so this pins the desired behavior for when the
+   * expansion extends to multiple inputs.
+   *
+   * @param directory
+   *          fixture directory
+   * @throws Exception
+   *           if fixture creation or query execution fails
+   */
+  @Disabled("#609: joins and LATERAL inputs still drop select items mixed with *")
+  @Test
+  void keepsExtraItemsOnJoins(@TempDir Path directory) throws Exception {
+    writeIntegerFixture(directory);
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      assertEquals(
+          Arrays.asList(List.of(1, 1, 1), List.of(1, 1, 1), List.of(2, 1, 1), List.of(3, 1, 1),
+              Arrays.asList((Object) null, (Object) 1, (Object) 1)),
+          rows(connection, "SELECT *, 1 AS k FROM o JOIN (VALUES (1)) v(x) ON TRUE ORDER BY 1", false));
     }
   }
 

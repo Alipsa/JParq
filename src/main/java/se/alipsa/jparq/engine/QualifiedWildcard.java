@@ -12,6 +12,7 @@ public final class QualifiedWildcard implements SelectListItem {
   private final String qualifierIdentifier;
   private final SourcePosition sourcePosition;
   private final int selectListIndex;
+  private final boolean unqualifiedStar;
 
   /**
    * Create a qualified wildcard without source position information.
@@ -67,6 +68,27 @@ public final class QualifiedWildcard implements SelectListItem {
    */
   public QualifiedWildcard(String qualifier, SourcePosition sourcePosition, int selectListIndex,
       String qualifierIdentifier) {
+    this(qualifier, sourcePosition, selectListIndex, qualifierIdentifier, false);
+  }
+
+  /**
+   * Creates a wildcard retaining the original qualifier's identifier quotes,
+   * marking whether it stands for an unqualified {@code *}.
+   *
+   * @param qualifier
+   *          decoded qualifier used for column expansion
+   * @param sourcePosition
+   *          source position, or null
+   * @param selectListIndex
+   *          zero-based projection position, or -1 if unknown
+   * @param qualifierIdentifier
+   *          original qualifier with SQL identifier quotes intact
+   * @param unqualifiedStar
+   *          whether this entry represents an unqualified {@code *} written in
+   *          the select list rather than a {@code qualifier.*} reference
+   */
+  public QualifiedWildcard(String qualifier, SourcePosition sourcePosition, int selectListIndex,
+      String qualifierIdentifier, boolean unqualifiedStar) {
     if (qualifier == null) {
       throw new IllegalArgumentException("Qualifier must not be null");
     }
@@ -78,6 +100,7 @@ public final class QualifiedWildcard implements SelectListItem {
     this.qualifierIdentifier = Objects.requireNonNull(qualifierIdentifier, "qualifierIdentifier").trim();
     this.sourcePosition = sourcePosition;
     this.selectListIndex = selectListIndex;
+    this.unqualifiedStar = unqualifiedStar;
   }
 
   /**
@@ -113,9 +136,19 @@ public final class QualifiedWildcard implements SelectListItem {
     return selectListIndex;
   }
 
+  /**
+   * Reports whether this entry stands for an unqualified {@code *} written in the
+   * select list rather than a {@code qualifier.*} reference.
+   *
+   * @return {@code true} for an unqualified {@code *}
+   */
+  public boolean unqualifiedStar() {
+    return unqualifiedStar;
+  }
+
   @Override
   public int hashCode() {
-    return Objects.hash(qualifier, qualifierIdentifier, sourcePosition, selectListIndex);
+    return Objects.hash(qualifier, qualifierIdentifier, sourcePosition, selectListIndex, unqualifiedStar);
   }
 
   @Override
@@ -126,13 +159,14 @@ public final class QualifiedWildcard implements SelectListItem {
     if (obj instanceof QualifiedWildcard other) {
       return Objects.equals(qualifier, other.qualifier)
           && Objects.equals(qualifierIdentifier, other.qualifierIdentifier)
-          && Objects.equals(sourcePosition, other.sourcePosition) && selectListIndex == other.selectListIndex;
+          && Objects.equals(sourcePosition, other.sourcePosition) && selectListIndex == other.selectListIndex
+          && unqualifiedStar == other.unqualifiedStar;
     }
     return false;
   }
 
   @Override
   public String toString() {
-    return qualifier + ".*";
+    return unqualifiedStar ? "*" : qualifier + ".*";
   }
 }

@@ -2184,7 +2184,7 @@ public final class SqlParser {
         }
         // A * mixed with other items expands with the input's columns at
         // preparation, keeping its position in the select list.
-        starWildcards.add(new QualifiedWildcard(qualifier, extractSourcePosition(item), selectIndex, qualifier));
+        starWildcards.add(new QualifiedWildcard(qualifier, extractSourcePosition(item), selectIndex, qualifier, true));
         selectIndex++;
         continue;
       }
@@ -2303,7 +2303,9 @@ public final class SqlParser {
    *          that qualifier
    * @return a {@link Select} instance where each qualified wildcard has been
    *         replaced with concrete column projections and ordering references
-   *         resolved against the complete output
+   *         resolved against the complete output; an unqualified {@code *} over
+   *         duplicate output names instead reverts the select to execution-time
+   *         wildcard expansion, dropping the other select items (#605, #609)
    * @throws IllegalArgumentException
    *           if a wildcard qualifier is unknown or an ordering label is
    *           ambiguous
@@ -2334,12 +2336,21 @@ public final class SqlParser {
     }
 
     int fallbackIndex = expressions.size();
+    boolean multipleTables = select.hasMultipleTables();
     for (QualifiedWildcard wildcard : select.qualifiedWildcards()) {
       String expressionQualifier = canonicalQualifier(wildcard.qualifierIdentifier(), select.tableReferences());
       String qualifier = stripCompositeIdentifierQuotes(expressionQualifier);
       List<QualifiedExpansionColumn> columns = resolveQualifierColumns(qualifier, normalized);
       if (columns == null || columns.isEmpty()) {
         throw new IllegalArgumentException("Qualified wildcard references unknown qualifier: " + qualifier);
+      }
+      boolean duplicateLabels = hasDuplicateLabels(columns);
+      if (wildcard.unqualifiedStar() && duplicateLabels) {
+        // An unqualified * over duplicate output names cannot expand without
+        // making every reference to them ambiguous (#605). Keep the
+        // execution-time wildcard expansion, which drops the other select
+        // items (#609), rather than failing a previously working query.
+        return asSelectAll(select);
       }
       int orderIndex = wildcard.selectListIndex() >= 0 ? wildcard.selectListIndex() : fallbackIndex;
       if (wildcard.selectListIndex() < 0) {
@@ -2353,7 +2364,12 @@ public final class SqlParser {
         // Labels can be arbitrary expression text; keep them intact instead of
         // letting the parser treat embedded dots as multipart name separators.
         column.setName(label, false);
-        if (qualifier != null && !qualifier.isBlank()) {
+        // A single input needs no qualifier: unqualified references bind like
+        // explicit select items, so a wildcard column and an explicit
+        // reference to the same column are the same ordering expression.
+        // Duplicate labels keep the qualifier so their references stay
+        // rejected (#605).
+        if ((multipleTables || duplicateLabels) && qualifier != null && !qualifier.isBlank()) {
           Table table = new Table();
           table.setName(expressionQualifier, false);
           column.setTable(table);
@@ -2394,6 +2410,39 @@ public final class SqlParser {
             ? select.preOrderBy()
             : resolveOrderKeys(select.preOrderBy(), labelCopy, expressionCopy, null),
         select.tableReferences(), select.commonTableExpressions());
+  }
+
+  /**
+   * Reports whether expanded wildcard columns repeat an output label.
+   *
+   * @param columns
+   *          the wildcard's ordered column definitions
+   * @return true when two columns share a lookup key
+   */
+  private static boolean hasDuplicateLabels(List<QualifiedExpansionColumn> columns) {
+    Set<String> seen = new LinkedHashSet<>();
+    for (QualifiedExpansionColumn column : columns) {
+      if (!seen.add(Identifier.lookupKey(column.label()))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Reverts a select to the wildcard-only projection shape whose columns expand
+   * from the input at execution time.
+   *
+   * @param select
+   *          the select to revert
+   * @return the select without explicit projection items or pending wildcards
+   */
+  private static Select asSelectAll(Select select) {
+    return new Select(List.of(), List.of(), select.table(), select.tableAlias(), select.where(), select.limit(),
+        select.offset(), select.orderBy(), select.distinct(), select.innerDistinct(), select.innerDistinctColumns(),
+        List.of(), List.of(), List.of(), select.groupByExpressions(), select.groupingSets(), select.having(),
+        select.preLimit(), select.preOffset(), select.preOrderBy(), select.tableReferences(),
+        select.commonTableExpressions());
   }
 
   private static Map<String, List<QualifiedExpansionColumn>> normaliseQualifierColumns(
