@@ -629,9 +629,7 @@ public final class AggregateFunctions {
         : new ValueExpressionEvaluator(inputSchema, null, mappings, WindowState.empty());
     final ColumnBinding inputBinding = bindingEvaluator == null ? null : column -> {
       String key = Identifier.lookupKey(column.getColumnName());
-      String alternative = ColumnMappingUtil.alternativeColumnKey(key);
-      if (!isQualified(column) && !groupByAliases.availableColumns().contains(key)
-          && (alternative == null || !groupByAliases.availableColumns().contains(alternative))) {
+      if (!isQualified(column) && !ColumnMappingUtil.containsEquivalentKey(groupByAliases.availableColumns(), key)) {
         return null;
       }
       String field = bindingEvaluator.resolveColumnName(column);
@@ -762,7 +760,7 @@ public final class AggregateFunctions {
     GroupedExpression.validate(expression, operand -> {
       if (operand instanceof Column column && findGroupIndex(column, groupIndexByText, groups, columnBinding) == null) {
         boolean outputAlias = column.getTable() == null
-            && aliases.contains(Identifier.lookupKey(column.getColumnName()));
+            && ColumnMappingUtil.containsEquivalentKey(aliases, Identifier.lookupKey(column.getColumnName()));
         if ((inputPrecedence || !outputAlias) && columnBinding != null && columnBinding.resolve(column) != null) {
           throw groupingFailure("Ungrouped input column in " + clause + ": " + column
               + "; columns must appear in the GROUP BY clause or be used in an aggregate");
@@ -1599,9 +1597,7 @@ public final class AggregateFunctions {
     if (key == null || !aliasContext.schemaKnown()) {
       return expression;
     }
-    String alternative = ColumnMappingUtil.alternativeColumnKey(key);
-    if (aliasContext.availableColumns().contains(key)
-        || alternative != null && aliasContext.availableColumns().contains(alternative)) {
+    if (ColumnMappingUtil.containsEquivalentKey(aliasContext.availableColumns(), key)) {
       return expression;
     }
     if (aliasContext.ambiguous().contains(key)) {
@@ -3552,8 +3548,11 @@ public final class AggregateFunctions {
         return null;
       }
       String key = Identifier.lookupKey(name);
-      if (key == null || !labelLookup.containsKey(key)) {
+      if (!ColumnMappingUtil.containsEquivalentKey(labelLookup.keySet(), key)) {
         throw syntaxFailure("Unknown or ungrouped column in grouped expression: " + name);
+      }
+      if (!labelLookup.containsKey(key)) {
+        key = ColumnMappingUtil.alternativeColumnKey(key);
       }
       return resolveScalarValue(labelLookup.get(key));
     }

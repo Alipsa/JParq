@@ -3343,11 +3343,10 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     Map<String, String> columns = ColumnMappingUtil.qualifierColumns(qualifierMapping, qualifier);
     String columnKey = Identifier.lookupKey(column);
-    String alternative = ColumnMappingUtil.alternativeColumnKey(columnKey);
-    if (!columns.containsKey(columnKey) && (alternative == null || !columns.containsKey(alternative))) {
+    String canonical = ColumnMappingUtil.equivalentColumn(columns, columnKey);
+    if (canonical == null) {
       throw SqlExceptions.syntaxFailure("Missing columns in parenthesized JOIN: " + qualifier + "." + column);
     }
-    String canonical = columns.containsKey(columnKey) ? columns.get(columnKey) : columns.get(alternative);
     if ("".equals(canonical)) {
       throw SqlExceptions.ambiguousColumn(qualifier + "." + column);
     }
@@ -6140,12 +6139,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     Map<String, String> names = qualifier == null || qualifier.isBlank() || qualified.isEmpty()
         ? index
         : ColumnMappingUtil.qualifierColumns(qualified, qualifier);
-    String key = Identifier.lookupKey(column);
-    String alternative = ColumnMappingUtil.alternativeColumnKey(key);
-    String canonical = names.get(key);
-    if (canonical == null && alternative != null) {
-      canonical = names.get(alternative);
-    }
+    String canonical = ColumnMappingUtil.equivalentColumn(names, Identifier.lookupKey(column));
     if ("".equals(canonical)) {
       throw SqlExceptions.ambiguousColumn(qualifier == null ? column : qualifier + "." + column);
     }
@@ -6350,9 +6344,9 @@ public class JParqPreparedStatement implements PreparedStatement {
         continue;
       }
       boolean present = containsColumn(available, normalized);
-      boolean labelMatch = normalizedLabels.contains(normalized);
+      boolean labelMatch = containsColumn(normalizedLabels, normalized);
       boolean missingReference = !normalizedReferences.contains(normalized);
-      boolean aliasOnly = labelMatch && (missingReference || mappedAliases.contains(normalized));
+      boolean aliasOnly = labelMatch && (missingReference || containsColumn(mappedAliases, normalized));
       if (!present && !aliasOnly) {
         missing.add(column);
       }
@@ -6364,7 +6358,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Matches a normalized reference using the existing quoted lowercase fallback.
+   * Matches a normalized reference against a key set using the quoting-equivalent
+   * fallback.
    *
    * @param available
    *          visible SQL lookup keys
@@ -6373,11 +6368,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @return whether the name exists in the visible input
    */
   private static boolean containsColumn(Set<String> available, String normalized) {
-    if (normalized == null || available.contains(normalized)) {
-      return true;
-    }
-    String alternative = ColumnMappingUtil.alternativeColumnKey(normalized);
-    return alternative != null && available.contains(alternative);
+    return normalized == null || ColumnMappingUtil.containsEquivalentKey(available, normalized);
   }
 
   private static void addColumns(Set<String> target, Set<String> source) {

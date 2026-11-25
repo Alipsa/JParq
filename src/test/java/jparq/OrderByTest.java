@@ -68,9 +68,11 @@ public class OrderByTest {
         assertEquals(List.of(List.of(1), List.of(1), List.of(2), List.of(3), Arrays.asList((Object) null)),
             rows(connection, "SELECT n AS renamed FROM " + source + " ORDER BY \"renamed\" NULLS LAST", prepared));
       }
-      assertEquals(
-          List.of(List.of(3, -3L), List.of(2, -2L), List.of(1, -1L), List.of(1, -1L), Arrays.asList(null, null)),
-          rows(connection, "SELECT n AS c, -n AS \"c\" FROM o ORDER BY \"c\" NULLS LAST", prepared));
+      for (String ordering : List.of("c", "\"c\"")) {
+        String sql = "SELECT n AS c, -n AS \"c\" FROM o ORDER BY " + ordering + " NULLS LAST";
+        SQLException ambiguous = assertThrows(SQLException.class, () -> rows(connection, sql, prepared), sql);
+        assertEquals("42702", ambiguous.getSQLState(), sql);
+      }
       for (String predicate : List.of("", " WHERE 1 = 0")) {
         String sql = "SELECT n AS repeated, n + 1 AS repeated FROM o" + predicate + " ORDER BY \"repeated\"";
         SQLException error = assertThrows(SQLException.class, () -> rows(connection, sql, prepared), sql);

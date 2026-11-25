@@ -46,7 +46,7 @@ class SubqueryCorrelatedFiltersIsolatorUnitTest {
     record.put("derived_id", 5);
 
     Map<String, Map<String, String>> correlationContext = CorrelationContextBuilder.build(List.of("derived"),
-        List.of("alias_id"), List.of("derived_id"), Map.of());
+        List.of("alias_id"), List.of("derived_id"), Map.of(), schema);
 
     SubqueryExecutor.SubqueryResult subqueryResult = new SubqueryExecutor.SubqueryResult(List.of("c"),
         List.of(List.of(1)));

@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.apache.avro.Schema;
 
 /**
  * Utility for constructing qualifier-aware correlation contexts from projected
@@ -20,11 +21,10 @@ public final class CorrelationContextBuilder {
   }
 
   /**
-   * Build a correlation mapping for the supplied qualifiers. Existing mappings
-   * are preserved, and any projected columns missing from the mapping are added
-   * using their canonical counterparts. This ensures the correlation context
-   * remains aware of the columns exposed in the projection, not just the raw
-   * schema fields supplied by the reader.
+   * Build a correlation mapping for the supplied qualifiers, resolving the lookup
+   * keys of projected names through the source schema when possible. Schema-aware
+   * keys keep quoted declarations such as {@code "X"} distinct from their
+   * lowercase counterparts, so projection labels cannot shadow unrelated columns.
    *
    * @param qualifiers
    *          qualifiers (tables or aliases) visible to the current query
@@ -36,11 +36,13 @@ public final class CorrelationContextBuilder {
    * @param existingMapping
    *          qualifier to canonical column mapping provided by the reader (may be
    *          {@code null})
+   * @param schema
+   *          source schema used to resolve declared lookup keys, or {@code null}
    * @return a normalized mapping containing all projected columns for each
    *         qualifier
    */
   public static Map<String, Map<String, String>> build(List<String> qualifiers, List<String> columnLabels,
-      List<String> canonicalColumnNames, Map<String, Map<String, String>> existingMapping) {
+      List<String> canonicalColumnNames, Map<String, Map<String, String>> existingMapping, Schema schema) {
 
     List<String> effectiveLabels = columnLabels == null ? List.of() : new ArrayList<>(columnLabels);
     List<String> canonicalColumns = canonicalColumnNames == null
@@ -66,13 +68,13 @@ public final class CorrelationContextBuilder {
         canonical = label;
       }
       if (label != null && !label.isBlank()) {
-        String normalizedLabel = Identifier.lookupKey(label);
+        String normalizedLabel = MaterializedNames.lookupKey(schema, label);
         if (normalizedLabel != null) {
           projectionMapping.put(normalizedLabel, canonical);
         }
       }
       if (canonical != null && !canonical.isBlank()) {
-        String normalizedCanonical = Identifier.lookupKey(canonical);
+        String normalizedCanonical = MaterializedNames.lookupKey(schema, canonical);
         if (normalizedCanonical != null) {
           projectionMapping.putIfAbsent(normalizedCanonical, canonical);
         }

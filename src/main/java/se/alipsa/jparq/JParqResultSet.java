@@ -295,9 +295,9 @@ public class JParqResultSet extends ResultSetAdapter {
         correlationCanonical.add(canonical);
       }
       Map<String, String> enrichedUnqualifiedMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping,
-          correlationCanonical);
+          correlationCanonical, reader.schema());
       Map<String, Map<String, String>> correlationContext = CorrelationContextBuilder.build(queryQualifiers,
-          correlationColumns, correlationCanonical, qualifierMapping);
+          correlationColumns, correlationCanonical, qualifierMapping, reader.schema());
       try {
         AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader, aggregatePlan,
             effectiveResidual, select.having(), select.orderBy(), subqueryExecutor, queryQualifiers, qualifierMapping,
@@ -349,9 +349,10 @@ public class JParqResultSet extends ResultSetAdapter {
           this.columnOrder.addAll(req); // mutable, safe
         }
         List<String> correlationColumns = this.columnOrder.isEmpty() ? List.of() : List.copyOf(this.columnOrder);
-        this.unqualifiedColumnMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping, correlationColumns);
+        this.unqualifiedColumnMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping, correlationColumns,
+            reader.schema());
         this.qualifierColumnMapping = CorrelationContextBuilder.build(queryQualifiers, correlationColumns,
-            correlationColumns, qualifierMapping);
+            correlationColumns, qualifierMapping, reader.schema());
         List<String> distinctProjection = resolveDistinctColumns(select);
         QueryProcessor.Options options = QueryProcessor.Options.builder().schema(reader.schema())
             .distinct(select.distinct()).distinctColumns(distinctProjection).distinctExpressions(select.expressions())
@@ -434,9 +435,10 @@ public class JParqResultSet extends ResultSetAdapter {
         }
       }
       List<String> correlationColumns = buildCorrelationColumns(this.canonicalColumnNames, correlationLabels, proj);
-      this.unqualifiedColumnMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping, correlationColumns);
+      this.unqualifiedColumnMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping, correlationColumns,
+          schema);
       this.qualifierColumnMapping = CorrelationContextBuilder.build(queryQualifiers, correlationLabels,
-          correlationColumns, qualifierMapping);
+          correlationColumns, qualifierMapping, schema);
 
       var evaluator = new se.alipsa.jparq.engine.ExpressionEvaluator(schema, subqueryExecutor, queryQualifiers,
           this.qualifierColumnMapping, this.unqualifiedColumnMapping);
@@ -1033,8 +1035,21 @@ public class JParqResultSet extends ResultSetAdapter {
     return fallback == null ? new ArrayList<>() : new ArrayList<>(fallback);
   }
 
+  /**
+   * Extends the unqualified mapping with projected correlation columns. Physical
+   * names are registered under their declared schema key so quoted mixed-case
+   * columns cannot claim the folded key of an unrelated lowercase column.
+   *
+   * @param baseMapping
+   *          normalized unqualified mapping provided by the reader, or null
+   * @param correlationColumns
+   *          projected labels and physical names to make addressable, or null
+   * @param schema
+   *          source schema used to resolve declared lookup keys, or null
+   * @return the enriched unqualified mapping
+   */
   private static Map<String, String> enrichUnqualifiedMapping(Map<String, String> baseMapping,
-      List<String> correlationColumns) {
+      List<String> correlationColumns, Schema schema) {
     if (correlationColumns == null || correlationColumns.isEmpty()) {
       return baseMapping == null ? Map.of() : baseMapping;
     }
@@ -1046,9 +1061,21 @@ public class JParqResultSet extends ResultSetAdapter {
       if (column == null || column.isBlank()) {
         continue;
       }
-      String normalized = Identifier.lookupKey(column);
-      if (normalized != null) {
-        enriched.putIfAbsent(normalized, column);
+      String folded = Identifier.lookupKey(column);
+      Schema.Field field = schema == null ? null : schema.getField(column);
+      if (field != null) {
+        String declared = MaterializedNames.lookupKey(field);
+        enriched.putIfAbsent(declared, column);
+        // A quoted mixed-case name such as "X" (Q:X) must not claim the folded
+        // key U:x of an unrelated lowercase column; a quoted lowercase name may
+        // keep its folded key for correlated lookups.
+        if (folded != null && !folded.equals(declared)
+            && !declared.equals(ColumnMappingUtil.alternativeColumnKey(folded))) {
+          continue;
+        }
+      }
+      if (folded != null) {
+        enriched.putIfAbsent(folded, column);
       }
     }
     return Map.copyOf(enriched);
