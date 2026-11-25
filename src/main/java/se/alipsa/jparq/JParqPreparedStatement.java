@@ -65,8 +65,15 @@ import net.sf.jsqlparser.expression.NullValue;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
+import net.sf.jsqlparser.statement.select.FromItem;
+import net.sf.jsqlparser.statement.select.LateralSubSelect;
 import net.sf.jsqlparser.statement.select.OrderByElement;
+import net.sf.jsqlparser.statement.select.ParenthesedFromItem;
+import net.sf.jsqlparser.statement.select.ParenthesedSelect;
+import net.sf.jsqlparser.statement.select.PlainSelect;
 import net.sf.jsqlparser.statement.select.Select;
+import net.sf.jsqlparser.statement.select.SetOperationList;
+import net.sf.jsqlparser.statement.select.WithItem;
 import org.apache.avro.LogicalType;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
@@ -5727,13 +5734,18 @@ public class JParqPreparedStatement implements PreparedStatement {
             }
             continue;
           }
+          // CTE names are always unqualified, so a schema-qualified reference
+          // targets a physical table even when the table name matches.
+          if (ref.schemaName() != null && !ref.schemaName().isBlank()) {
+            continue;
+          }
           Identifier refTable = Identifier.of(ref.tableName());
           if (refTable != null && refTable.resolve(names) != null) {
             return true;
           }
         }
       }
-      return false;
+      return expressionsReferenceCte(select, cteName);
     }
     if (query instanceof SqlParser.SetQuery setQuery) {
       for (SqlParser.SetComponent component : setQuery.components()) {
@@ -5743,6 +5755,141 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
     }
     return false;
+  }
+
+  /**
+   * Determines whether a SELECT's expressions contain a subquery that reads the
+   * CTE's own name, covering scalar, EXISTS, and IN subqueries in the projection,
+   * predicates, grouping, ordering, and join conditions.
+   *
+   * @param select
+   *          parsed SELECT whose expressions are inspected
+   * @param cteName
+   *          name of the CTE being evaluated
+   * @return {@code true} when an expression subquery references the CTE name
+   */
+  private static boolean expressionsReferenceCte(SqlParser.Select select, Identifier cteName) {
+    List<Expression> expressions = new ArrayList<>(select.expressions());
+    expressions.add(select.where());
+    expressions.add(select.having());
+    expressions.addAll(select.groupByExpressions());
+    select.orderBy().forEach(key -> expressions.add(key.expression()));
+    if (select.tableReferences() != null) {
+      select.tableReferences().forEach(ref -> expressions.add(ref == null ? null : ref.joinCondition()));
+    }
+    return new CteReferenceFinder(cteName).anyMatch(expressions);
+  }
+
+  /**
+   * Finds unqualified references to a CTE name inside subqueries nested in
+   * expressions. A nested WITH declaration of the same name shadows the CTE for
+   * that query's body, matching SQL name resolution; schema-qualified references
+   * always target physical tables.
+   */
+  private static final class CteReferenceFinder extends JSqlParserSupport.NamedArgumentVisitor {
+    private final Map<Identifier, Boolean> names;
+    private boolean found;
+
+    CteReferenceFinder(Identifier cteName) {
+      this.names = Map.of(cteName, Boolean.TRUE);
+    }
+
+    /**
+     * Scans expressions for a reference to the CTE name.
+     *
+     * @param expressions
+     *          expressions to inspect, nulls allowed
+     * @return {@code true} when any expression references the CTE name
+     */
+    boolean anyMatch(List<Expression> expressions) {
+      for (Expression expression : expressions) {
+        if (expression != null && !found) {
+          expression.accept(this, null);
+        }
+      }
+      return found;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public <S> Void visit(Select nested, S context) {
+      checkSelect(nested);
+      return null;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public <S> Void visit(ParenthesedSelect nested, S context) {
+      checkSelect(nested);
+      return null;
+    }
+
+    private void checkSelect(Select select) {
+      if (found || select == null) {
+        return;
+      }
+      boolean shadowed = false;
+      if (select.getWithItemsList() != null) {
+        for (WithItem<?> item : select.getWithItemsList()) {
+          if (item == null) {
+            continue;
+          }
+          // WITH item bodies resolve in the enclosing scope, so they can still
+          // reference the CTE even when the item shadows its name.
+          checkSelect(item.getSelect());
+          String alias = item.getAliasName() != null ? item.getAliasName() : item.getUnquotedAliasName();
+          Identifier name = Identifier.of(alias);
+          if (name != null && name.resolve(names) != null) {
+            shadowed = true;
+          }
+        }
+      }
+      if (shadowed) {
+        return;
+      }
+      if (select instanceof ParenthesedSelect parenthesed) {
+        checkSelect(parenthesed.getSelect());
+      } else if (select instanceof SetOperationList set) {
+        set.getSelects().forEach(this::checkSelect);
+      } else if (select instanceof PlainSelect plain) {
+        checkFromItem(plain.getFromItem());
+        if (plain.getJoins() != null) {
+          plain.getJoins().forEach(join -> checkFromItem(join.getRightItem()));
+        }
+        List<Expression> expressions = new ArrayList<>();
+        plain.getSelectItems().forEach(item -> expressions.add(item.getExpression()));
+        expressions.add(plain.getWhere());
+        expressions.add(plain.getHaving());
+        if (plain.getGroupBy() != null && plain.getGroupBy().getGroupByExpressionList() != null) {
+          expressions.addAll(plain.getGroupBy().getGroupByExpressionList());
+        }
+        anyMatch(expressions);
+      }
+    }
+
+    private void checkFromItem(FromItem item) {
+      if (found || item == null) {
+        return;
+      }
+      if (item instanceof Table table) {
+        boolean qualified = table.getSchemaName() != null && !table.getSchemaName().isBlank()
+            || table.getDatabase() != null && table.getDatabase().getDatabaseName() != null
+                && !table.getDatabase().getDatabaseName().isBlank();
+        Identifier name = Identifier.of(table.getName());
+        if (!qualified && name != null && name.resolve(names) != null) {
+          found = true;
+        }
+      } else if (item instanceof ParenthesedSelect nested) {
+        checkSelect(nested);
+      } else if (item instanceof ParenthesedFromItem parenthesed) {
+        checkFromItem(parenthesed.getFromItem());
+        if (parenthesed.getJoins() != null) {
+          parenthesed.getJoins().forEach(join -> checkFromItem(join.getRightItem()));
+        }
+      } else if (item instanceof LateralSubSelect lateral) {
+        checkSelect(lateral.getSelect());
+      }
+    }
   }
 
   private CteResult executeCteQuery(String sql, Map<Identifier, CteResult> context, Identifier tableName,
@@ -6207,7 +6354,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
 
       @Override
-      public <S> Void visit(net.sf.jsqlparser.statement.select.ParenthesedSelect nested, S context) {
+      public <S> Void visit(ParenthesedSelect nested, S context) {
         return visit((Select) nested, context);
       }
     };
