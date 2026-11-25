@@ -878,6 +878,27 @@ class SqlExceptionsTest {
     assertEquals("Failed to open query data source: disk gone", fallback.getMessage());
   }
 
+  /**
+   * Pins the set operation execution boundary's contexts: an unclassified engine
+   * failure surfaces the set operation fallback message, and a classified one
+   * surfaces the query-execution context. No query is known to reach the fallback
+   * branch, so the message construction is pinned here.
+   */
+  @Test
+  void dualContextWrapCoversTheSetOperationContexts() {
+    var plain = new IllegalStateException("boom");
+    var fallback = SqlExceptions.wrap("Failed to execute query", "Failed to execute set operation", plain);
+    assertEquals(SQLException.class, fallback.getClass());
+    assertNull(fallback.getSQLState());
+    assertSame(plain, fallback.getCause());
+    assertEquals("Failed to execute set operation: boom", fallback.getMessage());
+    var classified = SqlExceptions.syntaxFailure("ORDER BY position is outside the select list: 99");
+    var failure = SqlExceptions.wrap("Failed to execute query", "Failed to execute set operation", classified);
+    assertInstanceOf(SQLSyntaxErrorException.class, failure);
+    assertEquals("42000", failure.getSQLState());
+    assertEquals("Failed to execute query: ORDER BY position is outside the select list: 99", failure.getMessage());
+  }
+
   /** Tolerates a null failure without raising (issue #330). */
   @Test
   void wrapToleratesNullFailure() {

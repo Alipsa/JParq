@@ -147,10 +147,12 @@ class MixedWildcardProjectionTest {
   }
 
   /**
-   * Keeps the execution-time wildcard expansion when the input exposes duplicate
-   * column names: expanding the star would make every reference to them ambiguous
-   * (#605), so the additional items are dropped as before #609 instead of failing
-   * the query.
+   * Runs a star mixed with an extra item over an input with duplicate column
+   * names without the 42702 that expanding the star would cause (#605). Only the
+   * execution and the row count are asserted: the projected column count is a
+   * known deviation until #605/#609 are fixed, since the extra item {@code k} is
+   * dropped and {@code ORDER BY k} reports a misleading "Missing columns for
+   * table 'x'" error that names the input rather than the dropped item.
    *
    * @param prepared
    *          whether to use a prepared statement
@@ -163,13 +165,36 @@ class MixedWildcardProjectionTest {
   @ValueSource(booleans = {
       false, true
   })
-  void keepsTheWildcardFallbackOverDuplicateColumnNames(boolean prepared, @TempDir Path directory) throws Exception {
+  void toleratesDuplicateColumnNamesWithoutAmbiguityErrors(boolean prepared, @TempDir Path directory) throws Exception {
     String join = "(VALUES (1, 10)) a(id, v) JOIN (VALUES (1, 20)) b(id, v) ON a.id = b.id";
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
-      assertEquals(List.of(List.of(1, 10, 1, 20)),
-          rows(connection, "SELECT *, 1 AS k FROM (SELECT * FROM " + join + ") x", prepared));
-      assertEquals(List.of(List.of(1, 10, 20)),
-          rows(connection, "SELECT *, 1 AS k FROM (SELECT a.id, a.v, b.v FROM " + join + ") x", prepared));
+      assertEquals(1, rows(connection, "SELECT *, 1 AS k FROM (SELECT * FROM " + join + ") x", prepared).size());
+      assertEquals(1,
+          rows(connection, "SELECT *, 1 AS k FROM (SELECT a.id, a.v, b.v FROM " + join + ") x", prepared).size());
+    }
+  }
+
+  /**
+   * Projects the extra item alongside a star over an input with duplicate column
+   * names: the standard result carries the wildcard columns plus {@code k}. The
+   * duplicate-name fallback still drops {@code k} (the pre-#609 behavior), so
+   * this pins the correct expectation for when #605/#609 are fixed instead of
+   * locking in the narrow result.
+   *
+   * @param directory
+   *          fixture directory
+   * @throws Exception
+   *           if fixture creation or query execution fails
+   */
+  @Disabled("#605/#609: the duplicate-name fallback drops the extra select item")
+  @Test
+  void keepsExtraItemsOverDuplicateColumnNames(@TempDir Path directory) throws Exception {
+    String join = "(VALUES (1, 10)) a(id, v) JOIN (VALUES (1, 20)) b(id, v) ON a.id = b.id";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      assertEquals(List.of(List.of(1, 10, 1, 20, 1)),
+          rows(connection, "SELECT *, 1 AS k FROM (SELECT * FROM " + join + ") x", false));
+      assertEquals(List.of(List.of(1, 10, 20, 1)),
+          rows(connection, "SELECT *, 1 AS k FROM (SELECT a.id, a.v, b.v FROM " + join + ") x", false));
     }
   }
 
