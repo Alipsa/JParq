@@ -58,20 +58,6 @@ public final class OrderingUtil {
   }
 
   /**
-   * Validates that the given text parses as a representable ORDER BY positional
-   * reference, without returning the parsed value.
-   *
-   * @param literal
-   *          the positional reference to validate
-   * @throws IllegalArgumentException
-   *           if the reference does not name a position, with SQLState 42000
-   *           naming the position as written
-   */
-  public static void validatePosition(String literal) {
-    position(literal);
-  }
-
-  /**
    * Parses an ORDER BY positional reference, rejecting references outside 1
    * through the largest acceptable position with the JDBC syntax classification
    * instead of leaking a raw parse or arithmetic failure.

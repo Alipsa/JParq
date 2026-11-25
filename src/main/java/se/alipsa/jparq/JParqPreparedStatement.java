@@ -640,7 +640,17 @@ public class JParqPreparedStatement implements PreparedStatement {
     boolean transferred = false;
     try {
       if (setOperationQuery) {
-        JParqResultSet rs = executeSetOperation();
+        JParqResultSet rs;
+        try {
+          rs = executeSetOperation();
+        } catch (SQLException e) {
+          throw e;
+        } catch (Exception e) {
+          // A classified failure in the chain is a query-execution problem,
+          // such as an invalid ORDER BY position, not a set operation
+          // assembly failure.
+          throw SqlExceptions.wrap("Failed to execute query", "Failed to execute set operation", e);
+        }
         publishResult(rs, cancellation, context);
         transferred = true;
         return rs;
@@ -1745,7 +1755,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           if executing any component fails or if set operation requirements
    *           are violated
    */
-  private JParqResultSet executeSetOperation() throws SQLException {
+  public JParqResultSet executeSetOperation() throws SQLException {
     if (parsedSetQuery == null) {
       throw new SQLException("Set operation query not available for execution");
     }
@@ -2359,11 +2369,11 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          order specification parsed from the set operation query
    * @return ordered rows (or the original rows when no ordering is requested)
    * @throws SQLException
-   *           if an ORDER BY column cannot be resolved, even when the result is
-   *           empty
+   *           if an ORDER BY key carries neither position, label, nor expression
    * @throws IllegalArgumentException
-   *           if a positional reference is outside the set result, with SQLState
-   *           42000
+   *           if a positional reference is outside the set result or an ORDER BY
+   *           column cannot be resolved, even when the result is empty, with
+   *           SQLState 42000
    */
   private List<List<Object>> applySetOrdering(List<List<Object>> rows, List<String> labels, List<Integer> sqlTypes,
       List<Schema> valueSchemas, List<SqlParser.SetOrder> orderBy) throws SQLException {
@@ -2394,8 +2404,14 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
         String lookupKey = Identifier.lookupKey(order.columnLabel());
         Integer mapped = lookupKey == null ? null : labelIndexes.get(lookupKey);
+        if (mapped == null && lookupKey != null) {
+          // A quoted lowercase reference falls back to the unquoted label,
+          // matching single-select ORDER BY resolution (#385).
+          String alternative = ColumnMappingUtil.alternativeColumnKey(lookupKey);
+          mapped = alternative == null ? null : labelIndexes.get(alternative);
+        }
         if (mapped == null) {
-          throw new SQLException("Unknown set operation ORDER BY column: " + order.columnLabel());
+          throw SqlExceptions.syntaxFailure("Unknown set operation ORDER BY column: " + order.columnLabel());
         }
         index = mapped;
       } else {
@@ -2406,7 +2422,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           }
           String lookupKey = Identifier.lookupKey(column);
           if (lookupKey == null || !labelIndexes.containsKey(lookupKey)) {
-            throw new SQLException("Unknown set operation ORDER BY expression column: " + column);
+            throw SqlExceptions.syntaxFailure("Unknown set operation ORDER BY expression column: " + column);
           }
         }
         index = -1;

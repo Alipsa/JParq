@@ -1434,9 +1434,38 @@ public final class SqlParser {
       components.add(new SetComponent(component, operator, body.toString()));
     }
     List<SetOrder> orderBy = parseSetOrderBy(list.getOrderByElements());
+    validateSetOrderPositions(orderBy, components.getFirst());
     int limit = resolveLimit(list.getLimit(), list.getFetch());
     int offset = extractOffset(list.getOffset());
     return new SetQuery(List.copyOf(components), orderBy, limit, offset, List.copyOf(ctes));
+  }
+
+  /**
+   * Range-checks positional set ORDER BY references at preparation when the first
+   * branch fixes the result width: an explicit select list determines the width,
+   * while a wildcard branch defers the check to execution.
+   *
+   * @param orderBy
+   *          the parsed set ORDER BY keys
+   * @param first
+   *          the first set component, whose projection determines the result
+   *          width
+   * @throws IllegalArgumentException
+   *           if a positional reference is outside the known width, with SQLState
+   *           42000 naming the position as written
+   */
+  private static void validateSetOrderPositions(List<SetOrder> orderBy, SetComponent first) {
+    if (orderBy.isEmpty() || !(first.query() instanceof Select select)) {
+      return;
+    }
+    if (select.labels().isEmpty() || !select.qualifiedWildcards().isEmpty()) {
+      return;
+    }
+    for (SetOrder order : orderBy) {
+      if (order.ordinal() != null) {
+        OrderingUtil.position(order.ordinal(), select.labels().size());
+      }
+    }
   }
 
   /**
@@ -1498,7 +1527,7 @@ public final class SqlParser {
         // name it verbatim; the parse rejects zero and unrepresentable values
         // at preparation.
         ordinal = value.getStringValue();
-        OrderingUtil.validatePosition(ordinal);
+        OrderingUtil.position(ordinal);
       } else if (expression instanceof Column column) {
         columnLabel = column.getColumnName();
       } else {
@@ -2128,6 +2157,7 @@ public final class SqlParser {
 
     boolean selectAll = false;
     int selectIndex = 0;
+    List<QualifiedWildcard> starWildcards = new ArrayList<>();
     for (SelectItem<?> item : selectItems) {
       String text = item.toString().trim();
       Expression expr = item.getExpression();
@@ -2147,8 +2177,16 @@ public final class SqlParser {
         continue;
       }
       if (expr instanceof AllColumns) {
-        selectAll = true;
-        break;
+        String qualifier = singleInputQualifier(tableRefs);
+        if (qualifier == null) {
+          selectAll = true;
+          break;
+        }
+        // A * mixed with other items expands with the input's columns at
+        // preparation, keeping its position in the select list.
+        starWildcards.add(new QualifiedWildcard(qualifier, extractSourcePosition(item), selectIndex, qualifier));
+        selectIndex++;
+        continue;
       }
 
       if (tableRefs.size() == 1) {
@@ -2188,15 +2226,40 @@ public final class SqlParser {
       selectIndex++;
     }
 
-    if (selectAll) {
+    if (selectAll || (starWildcards.size() == 1 && labels.isEmpty() && qualifiedWildcards.isEmpty())) {
+      // A lone * expands from the input schema at execution time, when the
+      // full record width is known.
+      selectAll = true;
       labels = List.of();
       physicalCols = List.of();
       expressions = List.of();
       expressionOrder = List.of();
+    } else {
+      qualifiedWildcards.addAll(starWildcards);
     }
 
     return new Projection(labels, physicalCols, expressions, List.copyOf(expressionOrder),
         List.copyOf(qualifiedWildcards), selectAll);
+  }
+
+  /**
+   * Resolves the qualifier an unqualified {@code *} expands against when the
+   * query reads a single input.
+   *
+   * @param tableRefs
+   *          table references participating in the query
+   * @return the single input's alias or table name, or {@code null} when the
+   *         query has several inputs or the input has no usable name
+   */
+  private static String singleInputQualifier(List<TableReference> tableRefs) {
+    if (tableRefs == null || tableRefs.size() != 1) {
+      return null;
+    }
+    TableReference reference = tableRefs.getFirst();
+    if (!reference.joinGroup().isEmpty()) {
+      return null;
+    }
+    return reference.tableAlias() != null ? reference.tableAlias() : reference.tableName();
   }
 
   /**
@@ -2618,8 +2681,8 @@ public final class SqlParser {
         orderKeys.add(new OrderKey(column, asc, qualifier, element.getNullOrdering(), evaluation));
       }
     }
-    boolean pendingWildcards = ps.getSelectItems().stream()
-        .anyMatch(item -> item.getExpression() instanceof AllTableColumns);
+    boolean pendingWildcards = ps.getSelectItems().stream().anyMatch(
+        item -> item.getExpression() instanceof AllColumns || item.getExpression() instanceof AllTableColumns);
     boolean join = tableRefs.size() > 1 || tableRefs.stream().anyMatch(ref -> !ref.joinGroup().isEmpty());
     return pendingWildcards || join ? List.copyOf(orderKeys) : resolveOrderKeys(orderKeys, labels, expressions, null);
   }

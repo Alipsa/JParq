@@ -27,6 +27,7 @@ import se.alipsa.jparq.helper.LiteralConverter;
 public final class QueryProcessor implements AutoCloseable {
 
   private final RecordReader reader;
+  // DISTINCT key fallback, used only when no schema is known
   private final List<String> projection;
   private final Expression where;
   private final int limit;
@@ -362,7 +363,7 @@ public final class QueryProcessor implements AutoCloseable {
    * @param reader
    *          the reader providing {@link GenericRecord} instances
    * @param projection
-   *          list of columns to project
+   *          columns used as the DISTINCT key fallback when no schema is known
    * @param where
    *          the WHERE expression (may be null)
    * @param limit
@@ -623,9 +624,10 @@ public final class QueryProcessor implements AutoCloseable {
     if (OrderingUtil.isPosition(column)) {
       // The bound is the wildcard projection of the input, not the record
       // width: a USING join keeps its peer copies of the join columns in the
-      // record but hides them from the select list. When #609 is fixed, a
-      // projection wider than the input must be validated against the restored
-      // projection width instead.
+      // record but hides them from the select list. Positional references over
+      // a projection wider than the input are bound to their select-list
+      // expressions at preparation, so an unbound key always addresses the
+      // wildcard width.
       List<String> visible = computeProjection(List.of("*"), schema);
       int ordinal = OrderingUtil.position(column, visible.size());
       Schema.Field field = schema.getField(visible.get(ordinal - 1));

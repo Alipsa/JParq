@@ -5,8 +5,11 @@ import static jparq.support.QueryTestSupport.writeEmptyIntegerFixture;
 import static jparq.support.QueryTestSupport.writeIntegerFixture;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
 
 import java.nio.file.Path;
 import java.sql.DriverManager;
@@ -14,11 +17,11 @@ import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.Arrays;
 import java.util.List;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.JParqPreparedStatement;
 
 /**
  * Classifies invalid positional ORDER BY references with SQLState 42000 without
@@ -191,12 +194,10 @@ class OrderPositionErrorClassificationTest {
   }
 
   /**
-   * Until #609 is fixed, the top-level {@code SELECT *, expr} projection drops
-   * the expression column, so the runtime sort width is the input width and the
-   * valid output position is rejected as out of range instead of sorting. The
-   * window-function variant fails the same way, so both shapes are pinned here
-   * for the #609 fix. Several rows with a descending position keep the check
-   * honest once the drop is fixed: the rows must come back sorted by column 2,
+   * Sorts a wildcard-plus-expression projection by output position (#609): the
+   * select list keeps the extra expression column, so its ordinal position is
+   * valid and the rows come back sorted by it. Several rows with a descending
+   * position keep the check honest: the rows must come back sorted by column 2,
    * not merely accepted.
    *
    * @param directory
@@ -204,7 +205,6 @@ class OrderPositionErrorClassificationTest {
    * @throws Exception
    *           if fixture creation or query execution fails
    */
-  @Disabled("#609: SELECT *, expr drops the extra column; the runtime bound must be the projection width")
   @Test
   void sortsWildcardPlusExpressionByOutputPosition(@TempDir Path directory) throws Exception {
     writeIntegerFixture(directory);
@@ -213,10 +213,8 @@ class OrderPositionErrorClassificationTest {
           List.of(List.of(3, 4L), List.of(2, 3L), List.of(1, 2L), List.of(1, 2L),
               Arrays.asList((Object) null, (Object) null)),
           rows(connection, "SELECT *, n + 1 AS m FROM o ORDER BY 2 DESC NULLS LAST", false));
-      assertEquals(List.of(List.of(1, 4L), List.of(1, 3L), List.of(2, 2L), List.of(3, 1L)),
-          rows(connection,
-              "SELECT *, ROW_NUMBER() OVER (ORDER BY n DESC) AS rn FROM o WHERE n IS NOT NULL " + "ORDER BY 2 DESC",
-              false));
+      assertEquals(List.of(List.of(1, 4L), List.of(1, 3L), List.of(2, 2L), List.of(3, 1L)), rows(connection,
+          "SELECT *, ROW_NUMBER() OVER (ORDER BY n DESC) AS rn FROM o WHERE n IS NOT NULL ORDER BY 2 DESC", false));
     }
   }
 
@@ -394,16 +392,74 @@ class OrderPositionErrorClassificationTest {
           derived);
       assertEquals("42000", failure.getSQLState(), derived);
       assertTrue(failure.getMessage().contains("outside the select list: 99"), failure.getMessage());
-      // Unknown labels fail on an empty result too. #385: the failure is still
-      // an unclassified SQLException; when that issue is fixed, update this
-      // assertion to SQLSyntaxErrorException with SQLState 42000.
+      // Unknown labels carry the same syntax classification as an unresolvable
+      // single-select ORDER BY column, on an empty result too (#385).
       String unknown = "SELECT n FROM o WHERE 1 = 0 UNION ALL SELECT n FROM o WHERE 1 = 0 ORDER BY nosuch";
-      failure = assertThrows(SQLException.class, () -> rows(connection, unknown, prepared), unknown);
+      failure = assertThrows(SQLSyntaxErrorException.class, () -> rows(connection, unknown, prepared), unknown);
+      assertEquals("42000", failure.getSQLState(), unknown);
       assertTrue(failure.getMessage().contains("Unknown set operation ORDER BY column: nosuch"), failure.getMessage());
       assertEquals(
           Arrays.asList(List.of(1), List.of(1), List.of(1), List.of(1), List.of(2), List.of(2), List.of(3), List.of(3),
               Arrays.asList((Object) null), Arrays.asList((Object) null)),
           rows(connection, "SELECT n FROM o UNION ALL SELECT n FROM o ORDER BY 1", prepared));
+    }
+  }
+
+  /**
+   * Rejects an out-of-range set operation ordinal at preparation when the first
+   * branch has an explicit select list, and at execution when a wildcard first
+   * branch defers the width, pinning the execution-time diagnostic exactly.
+   *
+   * @param directory
+   *          fixture directory
+   * @throws Exception
+   *           if fixture creation or query execution fails
+   */
+  @Test
+  void classifiesSetOperationPositionsAtPreparationAndExecution(@TempDir Path directory) throws Exception {
+    writeIntegerFixture(directory);
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      // The explicit first branch fixes the set width at preparation.
+      String explicit = "SELECT n FROM o UNION ALL SELECT n FROM o ORDER BY 2";
+      SQLException failure = assertThrows(SQLSyntaxErrorException.class, () -> connection.prepareStatement(explicit),
+          explicit);
+      assertEquals("42000", failure.getSQLState(), explicit);
+      assertTrue(failure.getMessage().contains("outside the select list: 2"), failure.getMessage());
+      // A wildcard first branch defers the width check to execution, where the
+      // failure is routed through the query-execution context.
+      String wildcard = "SELECT * FROM o UNION ALL SELECT * FROM o ORDER BY 99";
+      try (var statement = connection.prepareStatement(wildcard)) {
+        failure = assertThrows(SQLSyntaxErrorException.class, statement::executeQuery, wildcard);
+        assertEquals("42000", failure.getSQLState(), wildcard);
+        assertEquals("Failed to execute query: ORDER BY position is outside the select list: 99", failure.getMessage());
+      }
+      assertEquals(
+          Arrays.asList(List.of(1), List.of(1), List.of(1), List.of(1), List.of(2), List.of(2), List.of(3), List.of(3),
+              Arrays.asList((Object) null), Arrays.asList((Object) null)),
+          rows(connection, "SELECT * FROM o UNION ALL SELECT * FROM o ORDER BY 1", false));
+    }
+  }
+
+  /**
+   * Routes an unclassified engine failure raised during set operation execution
+   * through the fallback context, keeping the detail and leaving the SQLState
+   * unset.
+   *
+   * @param directory
+   *          fixture directory
+   * @throws Exception
+   *           if fixture creation or query execution fails
+   */
+  @Test
+  void wrapsUnclassifiedSetOperationFailures(@TempDir Path directory) throws Exception {
+    writeIntegerFixture(directory);
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.prepareStatement("SELECT n FROM o UNION ALL SELECT n FROM o")) {
+      JParqPreparedStatement spied = spy((JParqPreparedStatement) statement);
+      doThrow(new IllegalStateException("boom")).when(spied).executeSetOperation();
+      SQLException failure = assertThrows(SQLException.class, spied::executeQuery);
+      assertEquals("Failed to execute set operation: boom", failure.getMessage());
+      assertNull(failure.getSQLState());
     }
   }
 

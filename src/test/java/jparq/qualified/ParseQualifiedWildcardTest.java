@@ -81,13 +81,16 @@ class ParseQualifiedWildcardTest {
   }
 
   @Test
-  @DisplayName("Parser preserves qualified wildcards when an unqualified star is present")
+  @DisplayName("Parser preserves both wildcards when an unqualified star accompanies a qualified one")
   void parsesQualifiedWildcardAlongsideUnqualifiedStar() {
     SqlParser.Select select = SqlParser.parseSelectAllowQualifiedWildcards("SELECT t.*, * FROM table t");
 
     List<QualifiedWildcard> wildcards = select.qualifiedWildcards();
 
-    assertEquals(1, wildcards.size(), "The qualified wildcard should not be discarded");
-    assertEquals("t", wildcards.getFirst().qualifier(), "Alias qualifier should be preserved");
+    assertEquals(2, wildcards.size(), "Both the qualified wildcard and the unqualified star are retained (#609)");
+    assertEquals("t", wildcards.get(0).qualifier(), "Alias qualifier should be preserved");
+    assertEquals(0, wildcards.get(0).selectListIndex(), "The qualified wildcard keeps its select-list position");
+    assertEquals("t", wildcards.get(1).qualifier(), "The unqualified star expands against the single input");
+    assertEquals(1, wildcards.get(1).selectListIndex(), "The unqualified star keeps its select-list position");
   }
 }
