@@ -5782,9 +5782,11 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Finds unqualified references to a CTE name inside subqueries nested in
-   * expressions. A nested WITH declaration of the same name shadows the CTE for
-   * that query's body, matching SQL name resolution; schema-qualified references
-   * always target physical tables.
+   * expressions. SQL name resolution applies: a nested WITH declaration of the
+   * same name shadows the CTE for that query's body and for the bodies of later
+   * items in the same clause, a nested WITH RECURSIVE declaration shadows it for
+   * every item body of its clause, and schema-qualified references always target
+   * physical tables.
    */
   private static final class CteReferenceFinder extends JSqlParserSupport.NamedArgumentVisitor {
     private final Map<Identifier, Boolean> names;
@@ -5829,17 +5831,23 @@ public class JParqPreparedStatement implements PreparedStatement {
         return;
       }
       boolean shadowed = false;
-      if (select.getWithItemsList() != null) {
-        for (WithItem<?> item : select.getWithItemsList()) {
+      List<WithItem<?>> withItems = select.getWithItemsList();
+      if (withItems != null && !withItems.isEmpty()) {
+        // JSqlParser reports the clause-level RECURSIVE keyword on the first
+        // item only; under RECURSIVE a same-named item is visible in every item
+        // body of the clause, including its own.
+        boolean clauseRecursive = withItems.get(0) != null && withItems.get(0).isRecursive();
+        boolean anyClaimsName = withItems.stream().anyMatch(this::claimsName);
+        for (WithItem<?> item : withItems) {
           if (item == null) {
             continue;
           }
-          // WITH item bodies resolve in the enclosing scope, so they can still
-          // reference the CTE even when the item shadows its name.
-          checkSelect(item.getSelect());
-          String alias = item.getAliasName() != null ? item.getAliasName() : item.getUnquotedAliasName();
-          Identifier name = Identifier.of(alias);
-          if (name != null && name.resolve(names) != null) {
+          // An item body resolves in the enclosing scope unless the name is
+          // already shadowed for it by an earlier item or a recursive clause.
+          if (!shadowed && !(clauseRecursive && anyClaimsName)) {
+            checkSelect(item.getSelect());
+          }
+          if (claimsName(item)) {
             shadowed = true;
           }
         }
@@ -5853,18 +5861,35 @@ public class JParqPreparedStatement implements PreparedStatement {
         set.getSelects().forEach(this::checkSelect);
       } else if (select instanceof PlainSelect plain) {
         checkFromItem(plain.getFromItem());
-        if (plain.getJoins() != null) {
-          plain.getJoins().forEach(join -> checkFromItem(join.getRightItem()));
-        }
         List<Expression> expressions = new ArrayList<>();
+        if (plain.getJoins() != null) {
+          plain.getJoins().forEach(join -> {
+            checkFromItem(join.getRightItem());
+            if (join.getOnExpressions() != null) {
+              expressions.addAll(join.getOnExpressions());
+            }
+          });
+        }
         plain.getSelectItems().forEach(item -> expressions.add(item.getExpression()));
         expressions.add(plain.getWhere());
         expressions.add(plain.getHaving());
         if (plain.getGroupBy() != null && plain.getGroupBy().getGroupByExpressionList() != null) {
           expressions.addAll(plain.getGroupBy().getGroupByExpressionList());
         }
+        if (plain.getOrderByElements() != null) {
+          plain.getOrderByElements().forEach(key -> expressions.add(key.getExpression()));
+        }
         anyMatch(expressions);
       }
+    }
+
+    private boolean claimsName(WithItem<?> item) {
+      if (item == null) {
+        return false;
+      }
+      String alias = item.getAliasName() != null ? item.getAliasName() : item.getUnquotedAliasName();
+      Identifier name = Identifier.of(alias);
+      return name != null && name.resolve(names) != null;
     }
 
     private void checkFromItem(FromItem item) {

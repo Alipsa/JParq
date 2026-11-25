@@ -277,4 +277,108 @@ class NestedCteShadowingTest {
         """;
     assertEquals(List.of(2), queryFirstColumn(sql));
   }
+
+  /**
+   * Verifies that inside a nested WITH, a same-named item shadows the outer CTE
+   * for the bodies of later items, so those bodies are not mistaken for
+   * self-references of the outer CTE.
+   *
+   * @throws SQLException
+   *           if the query cannot be prepared or executed
+   */
+  @Test
+  void nestedWithSiblingShadowingIsNotAnOuterSelfReference() throws SQLException {
+    String sql = """
+        WITH c AS (SELECT (WITH c AS (SELECT 5 AS v), d AS (SELECT v FROM c) SELECT v FROM d) AS x)
+        SELECT x FROM c
+        """;
+    assertEquals(List.of(5), queryFirstColumn(sql));
+  }
+
+  /**
+   * Verifies sibling shadowing inside a nested WITH in an EXISTS subquery of the
+   * outer CTE body.
+   *
+   * @throws SQLException
+   *           if the query cannot be prepared or executed
+   */
+  @Test
+  void nestedWithSiblingShadowingInsideExistsIsNotAnOuterSelfReference() throws SQLException {
+    String sql = """
+        WITH c AS (SELECT 1 AS x WHERE EXISTS (
+          WITH c AS (SELECT 5 AS v), d AS (SELECT v FROM c) SELECT v FROM d))
+        SELECT x FROM c
+        """;
+    assertEquals(List.of(1), queryFirstColumn(sql));
+  }
+
+  /**
+   * Verifies that a nested WITH RECURSIVE declaring the outer CTE's name shadows
+   * it for every item body of that clause, including the same-named item's own
+   * recursive body.
+   *
+   * @throws SQLException
+   *           if the query cannot be prepared or executed
+   */
+  @Test
+  void nestedWithRecursiveShadowingIsNotAnOuterSelfReference() throws SQLException {
+    String sql = """
+        WITH c AS (SELECT (WITH RECURSIVE c(n) AS (
+          SELECT 1 UNION ALL SELECT n + 1 FROM c WHERE n < 3) SELECT MAX(n) FROM c) AS x)
+        SELECT x FROM c
+        """;
+    assertEquals(List.of(3), queryFirstColumn(sql));
+  }
+
+  /**
+   * Verifies that a WITH RECURSIVE CTE whose body contains a nested WITH that
+   * shadows its name is not routed into the recursive evaluation path.
+   *
+   * @throws SQLException
+   *           if the query cannot be prepared or executed
+   */
+  @Test
+  void outerRecursiveCteWithNestedShadowingRunsAsOrdinaryCte() throws SQLException {
+    String sql = """
+        WITH RECURSIVE c AS (SELECT (WITH c AS (SELECT 5 AS v), d AS (SELECT v FROM c) SELECT v FROM d) AS x)
+        SELECT x FROM c
+        """;
+    assertEquals(List.of(5), queryFirstColumn(sql));
+  }
+
+  /**
+   * Verifies that a self-reference inside a join ON condition of an EXISTS
+   * subquery is rejected with the WITH RECURSIVE explanation.
+   *
+   * @throws SQLException
+   *           if the test connection cannot be opened
+   */
+  @Test
+  void joinConditionSelfReferenceWithoutRecursiveKeywordFails() throws SQLException {
+    String sql = """
+        WITH c AS (SELECT 1 AS x WHERE EXISTS (
+          SELECT 1 FROM (SELECT 1 AS k) a JOIN (SELECT 1 AS k) b ON a.k IN (SELECT 1 FROM c)))
+        SELECT x FROM c
+        """;
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      SQLException failure = assertThrows(SQLException.class, () -> connection.prepareStatement(sql).executeQuery());
+      assertTrue(failure.getMessage().contains("WITH RECURSIVE"), failure::getMessage);
+    }
+  }
+
+  /**
+   * Verifies that a self-reference inside an ORDER BY of an EXISTS subquery is
+   * rejected with the WITH RECURSIVE explanation.
+   *
+   * @throws SQLException
+   *           if the test connection cannot be opened
+   */
+  @Test
+  void orderBySelfReferenceWithoutRecursiveKeywordFails() throws SQLException {
+    String sql = "WITH c AS (SELECT 1 AS x WHERE EXISTS (SELECT 1 ORDER BY (SELECT 1 FROM c))) SELECT x FROM c";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      SQLException failure = assertThrows(SQLException.class, () -> connection.prepareStatement(sql).executeQuery());
+      assertTrue(failure.getMessage().contains("WITH RECURSIVE"), failure::getMessage);
+    }
+  }
 }
