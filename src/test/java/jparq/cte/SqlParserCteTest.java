@@ -161,4 +161,22 @@ class SqlParserCteTest {
       return false;
     }), "Each set component should be able to reference the CTE");
   }
+
+  /**
+   * Verifies that the RECURSIVE keyword is recorded on every CTE of the clause.
+   */
+  @Test
+  void parseSelectRecordsRecursiveKeywordOnAllClauseItems() {
+    var recursive = SqlParser.parseSelect("""
+        WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3),
+        c AS (SELECT 1 AS x)
+        SELECT n FROM r
+        """);
+    assertTrue(recursive.commonTableExpressions().stream().allMatch(SqlParser.CommonTableExpression::recursive),
+        "RECURSIVE is clause-level and should apply to every CTE of the clause");
+
+    var plain = SqlParser.parseSelect("WITH c AS (SELECT 1 AS x) SELECT x FROM c");
+    assertFalse(plain.commonTableExpressions().getFirst().recursive(),
+        "A WITH clause without the RECURSIVE keyword must not mark its CTEs recursive");
+  }
 }

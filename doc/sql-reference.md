@@ -606,6 +606,14 @@ name.
 
 ### Recursive CTEs
 
+A CTE's own name is in scope inside its body only when the WITH clause is declared `WITH RECURSIVE`. Without the
+keyword, a same-named reference inside a nested CTE body resolves to the enclosing declaration:
+
+```sql
+WITH c AS (SELECT 1 AS x)
+SELECT x FROM (WITH c AS (SELECT x + 1 AS x FROM c) SELECT x FROM c) t  -- returns 2
+```
+
 Recursive CTEs keep the anchor's numeric types, decimal precision, and scale; recursive schemas are not widened
 across iterations. Recursive values that need fractional truncation or decimal rounding, or that exceed integer
 ranges or decimal precision, fail with `SQLException` (SQLState `22003`).

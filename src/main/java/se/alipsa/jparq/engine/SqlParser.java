@@ -368,8 +368,12 @@ public final class SqlParser {
    *          the parsed query that produces the rows of the CTE
    * @param sql
    *          textual representation of the CTE body
+   * @param recursive
+   *          {@code true} when the WITH clause was declared with the
+   *          {@code RECURSIVE} keyword
    */
-  public record CommonTableExpression(Identifier name, List<String> columnAliases, Query query, String sql) {
+  public record CommonTableExpression(Identifier name, List<String> columnAliases, Query query, String sql,
+      boolean recursive) {
   }
 
   /**
@@ -1010,6 +1014,9 @@ public final class SqlParser {
     if (withItems == null || withItems.isEmpty()) {
       return List.of();
     }
+    // RECURSIVE is a clause-level keyword, but JSqlParser reports it on the
+    // first WITH item only, so every item in the clause shares the flag.
+    boolean recursive = withItems.stream().anyMatch(item -> item != null && item.isRecursive());
     List<CommonTableExpression> parsed = new ArrayList<>(withItems.size());
     List<CommonTableExpression> prior = new ArrayList<>();
     for (WithItem<?> item : withItems) {
@@ -1037,7 +1044,7 @@ public final class SqlParser {
       Query query = parseSelectStatement(select.getSelect(), available, availableLookup, allowQualifiedWildcards,
           lateralScope);
       String sql = select.toString();
-      CommonTableExpression cte = new CommonTableExpression(name, columnAliases, query, sql);
+      CommonTableExpression cte = new CommonTableExpression(name, columnAliases, query, sql, recursive);
       parsed.add(cte);
       prior.add(cte);
     }

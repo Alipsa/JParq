@@ -1457,7 +1457,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private Schema buildCteOutputSchema(SqlParser.CommonTableExpression cte, List<SqlParser.CommonTableExpression> ctes,
       Function<Column, Schema> outer, CteMemo memo) throws SQLException {
-    if (queryReferencesCte(cte.query(), cte.name())) {
+    if (cte.recursive() && queryReferencesCte(cte.query(), cte.name())) {
       return null;
     }
     List<String> names = cte.columnAliases().isEmpty() ? queryLabels(cte.query()) : cte.columnAliases();
@@ -5597,7 +5597,9 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (cte == null) {
       throw new SQLException("CTE definition cannot be null");
     }
-    if (queryReferencesCte(cte.query(), cte.name())) {
+    // Only a WITH RECURSIVE declaration may self-reference; without the keyword
+    // a matching name inside the body resolves to an enclosing CTE instead.
+    if (cte.recursive() && queryReferencesCte(cte.query(), cte.name())) {
       return evaluateRecursiveCte(cte, available);
     }
     return executeCteQuery(cte.sql(), available, cte.name(), cte.columnAliases());
